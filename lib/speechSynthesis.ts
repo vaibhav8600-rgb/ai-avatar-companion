@@ -20,6 +20,27 @@ export function isSpeechSynthesisSupported(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+// Mobile browsers (especially iOS Safari) only allow speech that is started
+// from a direct user gesture. Our replies are spoken *after* an async network
+// call, so by then we're outside the gesture and the speech is silently
+// blocked. Calling this from a tap/click "unlocks" speech for the rest of the
+// session by speaking a near-silent utterance synchronously within the gesture.
+let primed = false;
+export function primeSpeechSynthesis(): void {
+  if (primed || !isSpeechSynthesisSupported()) return;
+  try {
+    const synth = window.speechSynthesis;
+    const warmup = new SpeechSynthesisUtterance(" ");
+    warmup.volume = 0;
+    synth.speak(warmup);
+    // Some engines pause after the silent warm-up; make sure we're running.
+    synth.resume();
+    primed = true;
+  } catch {
+    // ignore — we'll still try to speak normally later.
+  }
+}
+
 /**
  * Returns voices, waiting briefly if the list hasn't populated yet.
  * Chrome loads voices asynchronously.
@@ -99,6 +120,9 @@ export function speak(options: SpeakOptions): void {
   }
 
   synth.speak(utterance);
+  // Mobile engines sometimes start in a paused state right after cancel();
+  // resume() is a no-op when already running and unsticks it when not.
+  synth.resume();
 }
 
 export function stopSpeaking(): void {

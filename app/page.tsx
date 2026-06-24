@@ -17,6 +17,7 @@ import {
   isSpeechSynthesisSupported,
   speak,
   stopSpeaking,
+  primeSpeechSynthesis,
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
 import {
@@ -47,7 +48,8 @@ export default function Page() {
   const [volume, setVolume] = useState(1);
   const [voiceName, setVoiceName] = useState<string | undefined>(undefined);
   const [pushToTalk, setPushToTalk] = useState(false);
-  const [liveAvatarEnabled, setLiveAvatarEnabled] = useState(true);
+  // Default to the still image + browser voice; live video is opt-in (Settings).
+  const [liveAvatarEnabled, setLiveAvatarEnabled] = useState(false);
 
   // ----- refs (don't trigger re-renders) -----
   const recognizerRef = useRef<ReturnType<typeof createRecognizer> | null>(null);
@@ -249,6 +251,9 @@ export default function Page() {
   }, []);
 
   const handleMicPress = useCallback(() => {
+    // Unlock mobile speech within this user gesture so the reply can be spoken
+    // later (after the async AI call, which is outside any gesture).
+    primeSpeechSynthesis();
     if (pushToTalk) {
       startListening();
     } else {
@@ -277,6 +282,8 @@ export default function Page() {
       if (!textDraft.trim()) return;
       const text = textDraft;
       setTextDraft("");
+      // Unlock mobile speech within this gesture before the async reply.
+      primeSpeechSynthesis();
       stopSpeaking();
       void sendUserMessage(text);
     },
