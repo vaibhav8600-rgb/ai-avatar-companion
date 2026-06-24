@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import type { AvatarState } from "@/types";
 
 interface AvatarStageProps {
@@ -11,8 +11,11 @@ interface AvatarStageProps {
   /** Refs for the live Simli video/audio stream (when enabled). */
   videoRef?: RefObject<HTMLVideoElement>;
   audioRef?: RefObject<HTMLAudioElement>;
-  /** When true, show the live lip-synced video instead of the static image. */
-  showVideo?: boolean;
+  /**
+   * True when live mode is engaged and the stream is connecting or ready.
+   * We show a loader until the video actually starts playing, then reveal it.
+   */
+  liveActive?: boolean;
 }
 
 /**
@@ -27,12 +30,22 @@ export default function AvatarStage({
   interimText,
   videoRef,
   audioRef,
-  showVideo = false,
+  liveActive = false,
 }: AvatarStageProps) {
   const isSpeaking = state === "speaking";
   const isListening = state === "listening";
   const isThinking = state === "thinking";
   const isError = state === "error";
+
+  // Track whether the live video is actually rendering frames, so we can keep a
+  // loader up until her face is really on screen (not just "connected").
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  useEffect(() => {
+    if (!liveActive) setVideoPlaying(false);
+  }, [liveActive]);
+
+  const showVideo = liveActive && videoPlaying;
+  const showLoader = liveActive && !videoPlaying;
 
   return (
     <div className="relative flex flex-col items-center justify-center">
@@ -131,6 +144,8 @@ export default function AvatarStage({
               autoPlay
               playsInline
               muted
+              onPlaying={() => setVideoPlaying(true)}
+              onLoadedData={() => setVideoPlaying(true)}
               className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
                 showVideo ? "opacity-100" : "opacity-0"
               }`}
@@ -148,6 +163,18 @@ export default function AvatarStage({
               sizes="(max-width: 768px) 320px, 360px"
               className="object-cover"
             />
+          )}
+
+          {/* Live-mode loader — overlays the image until her face is on screen. */}
+          {showLoader && (
+            <div className="absolute inset-0 grid place-items-center bg-ink-900/55 backdrop-blur-sm animate-fade-up">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-10 w-10 rounded-full border-2 border-white/15 border-t-signal-400 animate-spin" />
+                <p className="text-[11px] uppercase tracking-[0.18em] text-cream-100/60">
+                  Waking her up…
+                </p>
+              </div>
+            </div>
           )}
 
           {/* Subtle vignette */}
