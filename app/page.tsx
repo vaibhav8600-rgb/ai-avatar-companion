@@ -27,6 +27,10 @@ import {
   saveHistory,
   clearHistory,
   clearMemory,
+  loadTtsModel,
+  saveTtsModel,
+  loadGeminiVoice,
+  saveGeminiVoice,
 } from "@/lib/memoryManager";
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
 
@@ -50,6 +54,10 @@ export default function Page() {
   const [pushToTalk, setPushToTalk] = useState(false);
   // Default to the still image + browser voice; live video is opt-in (Settings).
   const [liveAvatarEnabled, setLiveAvatarEnabled] = useState(false);
+  // User-selected avatar voice model ("" = Auto/server fallback chain).
+  const [ttsModel, setTtsModel] = useState("");
+  // User-selected Gemini voice persona ("" = server default).
+  const [geminiVoice, setGeminiVoice] = useState("");
 
   // ----- refs (don't trigger re-renders) -----
   const recognizerRef = useRef<ReturnType<typeof createRecognizer> | null>(null);
@@ -94,7 +102,17 @@ export default function Page() {
   useEffect(() => {
     setMemory(loadMemory());
     setMessages(loadHistory());
+    setTtsModel(loadTtsModel());
+    setGeminiVoice(loadGeminiVoice());
   }, []);
+
+  useEffect(() => {
+    saveTtsModel(ttsModel);
+  }, [ttsModel]);
+
+  useEffect(() => {
+    saveGeminiVoice(geminiVoice);
+  }, [geminiVoice]);
 
   useEffect(() => {
     saveMemory(memory);
@@ -180,7 +198,7 @@ export default function Page() {
         if (live) {
           setAvatarState("speaking");
           try {
-            await liveAvatar.speak(reply);
+            await liveAvatar.speak(reply, ttsModel, geminiVoice);
             // The avatar's "silent" event returns us to idle when it finishes.
           } catch (speakErr) {
             console.warn("Live avatar TTS failed — falling back to Web Speech:", speakErr);
@@ -198,7 +216,7 @@ export default function Page() {
         setAvatarState("error");
       }
     },
-    [messages, memory, liveAvatarEnabled, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [messages, memory, liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
   );
 
   // ----- mic actions -----
@@ -519,6 +537,10 @@ export default function Page() {
           liveAvatarSupported={liveAvatarSupported}
           liveAvatarEnabled={liveAvatarEnabled}
           onLiveAvatarChange={setLiveAvatarEnabled}
+          ttsModel={ttsModel}
+          onTtsModelChange={setTtsModel}
+          geminiVoice={geminiVoice}
+          onGeminiVoiceChange={setGeminiVoice}
           onResetConversation={handleReset}
         />
       </main>

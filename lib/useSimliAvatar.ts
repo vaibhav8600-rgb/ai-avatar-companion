@@ -131,30 +131,33 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
   }, [doConnect, status]);
 
   /** Synthesize `text` and stream it to the avatar for lip-sync. */
-  const speak = useCallback(async (text: string): Promise<void> => {
-    const client = clientRef.current;
-    if (!client) throw new Error("Avatar not connected");
+  const speak = useCallback(
+    async (text: string, model?: string, voice?: string): Promise<void> => {
+      const client = clientRef.current;
+      if (!client) throw new Error("Avatar not connected");
 
-    const res = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error((detail as { error?: string }).error || `TTS failed (${res.status})`);
-    }
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, model, voice }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error((detail as { error?: string }).error || `TTS failed (${res.status})`);
+      }
 
-    const { audioBase64, sampleRate } = (await res.json()) as {
-      audioBase64: string;
-      sampleRate: number;
-    };
-    const pcm = await decodeToSimliPcm(audioBase64, sampleRate || 24000, 16000);
+      const { audioBase64, sampleRate } = (await res.json()) as {
+        audioBase64: string;
+        sampleRate: number;
+      };
+      const pcm = await decodeToSimliPcm(audioBase64, sampleRate || 24000, 16000);
 
-    for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-      client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
-    }
-  }, []);
+      for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+        client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+      }
+    },
+    [],
+  );
 
   /** Stop the avatar mid-sentence (used when the user starts talking). */
   const clear = useCallback(() => {
