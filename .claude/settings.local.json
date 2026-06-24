@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(cd /tmp/simli-dts/package/dist && sed -n '131,175p' client.js && echo \"=== iceServers usage ===\" && grep -n \"iceServers\\\\|generateIceServers\\\\|this.iceServers\" client.js)",
+      "Read(//tmp/simli-dts/package/**)",
+      "WebFetch(domain:ai.google.dev)",
+      "PowerShell(npm install simli-client@3.0.2 2>&1)",
+      "PowerShell(npx next build 2>&1)"
+    ]
+  }
+}
