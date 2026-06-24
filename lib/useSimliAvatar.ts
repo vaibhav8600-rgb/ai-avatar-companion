@@ -79,7 +79,14 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
         return false;
       }
 
-      const { SimliClient, LogLevel } = await import("simli-client");
+      // NOTE: we import the package's "./dist/client" entry directly instead of
+      // the "simli-client" main entry. simli-client@3.0.2 ships a casing bug —
+      // dist/index.js does `require("./Client")` but the real file is
+      // `dist/client.js` (lowercase). That resolves on case-insensitive
+      // filesystems (Windows/macOS) but breaks the production build on Linux
+      // (e.g. Vercel) with "Can't resolve './Client'". dist/client.js exports
+      // everything we need and its transitive imports are correctly cased.
+      const { SimliClient, LogLevel } = await import("simli-client/dist/client");
       const client = new SimliClient(
         data.session_token,
         videoRef.current,
