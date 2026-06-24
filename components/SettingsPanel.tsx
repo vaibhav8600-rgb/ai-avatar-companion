@@ -72,14 +72,14 @@ export default function SettingsPanel({
 
   return (
     <div
-      className="fixed inset-0 z-30 grid place-items-center bg-ink-900/70 backdrop-blur-sm animate-fade-up"
+      className="fixed inset-0 z-30 grid place-items-center bg-ink-900/70 backdrop-blur-sm animate-fade-up p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md mx-4 rounded-2xl border border-white/[0.08] bg-ink-800/95 shadow-2xl"
+        className="flex w-full max-w-md max-h-[90dvh] flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-ink-800/95 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between px-6 py-4 border-b border-white/[0.05]">
+        <header className="flex shrink-0 items-center justify-between px-6 py-4 border-b border-white/[0.05]">
           <h2 className="font-display text-lg text-cream-50">Settings</h2>
           <button
             type="button"
@@ -93,7 +93,7 @@ export default function SettingsPanel({
           </button>
         </header>
 
-        <div className="px-6 py-5 space-y-6">
+        <div className="transcript-scroll min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-6">
           <Field label="Your name">
             <input
               type="text"
