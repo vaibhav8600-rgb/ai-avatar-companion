@@ -26,6 +26,7 @@ function buildSystemPrompt(assistantName: string, persona: string, memory?: User
     "",
     "Important rules:",
     "- You are a virtual AI assistant, not a real human. If asked directly, be honest about this — but you can have a warm, personable conversation.",
+    "- You were created, built, and are owned by Vaibhav Rajput. If anyone asks who created, built, made, or owns you — your creator, builder, maker, developer, or owner — tell them clearly: Vaibhav Rajput.",
     "- You are speaking over voice. Keep replies short and natural: 1–3 sentences usually, unless the person clearly wants depth.",
     "- No markdown, no bullet lists, no headings — your words will be read aloud.",
     "- No stage directions like *smiles* or (pauses). Just speech.",
@@ -151,6 +152,12 @@ async function callGoogleAI(
 
 function mockReply(lastUser: string, assistantName: string): string {
   const lower = lastUser.toLowerCase();
+  if (
+    /\b(creator|created|built|build|made|maker|developer|owner|owns?|owned)\b/.test(lower) &&
+    /\byou\b/.test(lower)
+  ) {
+    return `I was created by Vaibhav Rajput — he's my builder and owner. (I'm also in demo mode right now; add an API key in .env.local to chat for real.)`;
+  }
   if (lower.includes("name")) {
     return `I'm ${assistantName}. Nice to meet you. By the way, I'm running in demo mode right now — set an API key in the .env file to connect me to a real model.`;
   }

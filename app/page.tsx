@@ -64,7 +64,11 @@ export default function Page() {
     onSilent: () => setAvatarState((s) => (s === "speaking" ? "idle" : s)),
     onError: (m) => console.warn("Live avatar:", m),
   });
-  const liveReady = liveAvatarEnabled && liveAvatar.status === "ready";
+  // Live mode is "active" while connecting or streaming — AvatarStage shows a
+  // loader until the face actually starts playing.
+  const liveActive =
+    liveAvatarEnabled &&
+    (liveAvatar.status === "connecting" || liveAvatar.status === "ready");
   const liveAvatarSupported = liveAvatar.status !== "unconfigured";
 
   // Speak a reply through the browser's built-in voice (fallback path).
@@ -168,8 +172,10 @@ export default function Page() {
           return;
         }
 
-        // Speak the reply. Prefer the live lip-synced avatar; if it isn't
-        // available (or fails), fall back to the browser's built-in voice.
+        // Voice fallback chain:
+        //   1. Live avatar (Gemini TTS model chain, server-side) — lip-synced.
+        //   2. If every TTS model fails (or live isn't available), the browser's
+        //      Web Speech API speaks the reply as a last resort.
         const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
         if (live) {
           setAvatarState("speaking");
@@ -177,7 +183,9 @@ export default function Page() {
             await liveAvatar.speak(reply);
             // The avatar's "silent" event returns us to idle when it finishes.
           } catch (speakErr) {
-            console.warn("Live avatar speak failed, using browser voice:", speakErr);
+            console.warn("Live avatar TTS failed — falling back to Web Speech:", speakErr);
+            // Drop any half-sent Simli buffer, then speak via the browser.
+            liveAvatar.clear();
             speakWithBrowser(reply);
           }
         } else {
@@ -190,7 +198,7 @@ export default function Page() {
         setAvatarState("error");
       }
     },
-    [messages, memory, liveAvatarEnabled, liveAvatar.ensureConnected, liveAvatar.speak, speakWithBrowser],
+    [messages, memory, liveAvatarEnabled, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
   );
 
   // ----- mic actions -----
@@ -399,7 +407,7 @@ export default function Page() {
             interimText={interimText}
             videoRef={liveAvatar.videoRef}
             audioRef={liveAvatar.audioRef}
-            showVideo={liveReady}
+            liveActive={liveActive}
           />
 
           <div className="mt-8">
