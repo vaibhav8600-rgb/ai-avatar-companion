@@ -60,3 +60,45 @@ export function clearHistory(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(HISTORY_KEY);
 }
+
+// --- avatar voice model preference ---
+
+const TTS_MODEL_KEY = "aac:ttsModel:v1";
+
+export function loadTtsModel(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem(TTS_MODEL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveTtsModel(model: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(TTS_MODEL_KEY, model);
+  } catch {
+    // ignore
+  }
+}
+
+const GEMINI_VOICE_KEY = "aac:geminiVoice:v1";
+
+export function loadGeminiVoice(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem(GEMINI_VOICE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveGeminiVoice(voice: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(GEMINI_VOICE_KEY, voice);
+  } catch {
+    // ignore
+  }
+}

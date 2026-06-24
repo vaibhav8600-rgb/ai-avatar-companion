@@ -6,7 +6,10 @@
       "Read(//tmp/simli-dts/package/**)",
       "WebFetch(domain:ai.google.dev)",
       "PowerShell(npm install simli-client@3.0.2 2>&1)",
-      "PowerShell(npx next build 2>&1)"
+      "PowerShell(npx next build 2>&1)",
+      "Bash(node -e \"console.log\\('global WebSocket:', typeof WebSocket\\)\")",
+      "Bash(node -e \"try{require.resolve\\('ws'\\);console.log\\('ws installed'\\)}catch{console.log\\('no ws package'\\)}\")",
+      "WebSearch"
     ]
   }
 }

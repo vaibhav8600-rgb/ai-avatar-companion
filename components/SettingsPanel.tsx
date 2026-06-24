@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getVoices, pickDefaultVoice } from "@/lib/speechSynthesis";
+import { TTS_MODEL_OPTIONS, GEMINI_VOICE_OPTIONS } from "@/lib/ttsModels";
 import type { UserMemory } from "@/types";
 
 interface SettingsPanelProps {
@@ -19,6 +20,12 @@ interface SettingsPanelProps {
   liveAvatarSupported: boolean;
   liveAvatarEnabled: boolean;
   onLiveAvatarChange: (v: boolean) => void;
+  /** Selected avatar voice model ("" = Auto). */
+  ttsModel: string;
+  onTtsModelChange: (model: string) => void;
+  /** Selected Gemini voice persona ("" = Default). */
+  geminiVoice: string;
+  onGeminiVoiceChange: (voice: string) => void;
   onResetConversation: () => void;
 }
 
@@ -36,6 +43,10 @@ export default function SettingsPanel({
   liveAvatarSupported,
   liveAvatarEnabled,
   onLiveAvatarChange,
+  ttsModel,
+  onTtsModelChange,
+  geminiVoice,
+  onGeminiVoiceChange,
   onResetConversation,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -144,6 +155,42 @@ export default function SettingsPanel({
               </div>
             </Field>
           )}
+
+          <Field label="Avatar voice model">
+            <select
+              value={ttsModel}
+              onChange={(e) => onTtsModelChange(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-cream-100 text-sm focus:outline-none focus:border-signal-500/60"
+            >
+              {TTS_MODEL_OPTIONS.map((m) => (
+                <option key={m.id || "auto"} value={m.id}>
+                  {m.label}
+                  {m.hint ? ` — ${m.hint}` : ""}
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-cream-100/40">
+              Used for the live video avatar&apos;s voice. Falls back automatically
+              if a model is unavailable.
+            </span>
+          </Field>
+
+          <Field label="Avatar voice">
+            <select
+              value={geminiVoice}
+              onChange={(e) => onGeminiVoiceChange(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-cream-100 text-sm focus:outline-none focus:border-signal-500/60"
+            >
+              {GEMINI_VOICE_OPTIONS.map((v) => (
+                <option key={v.id || "default"} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-cream-100/40">
+              The live avatar&apos;s voice persona.
+            </span>
+          </Field>
 
           <Field label="Mic mode">
             <div className="flex gap-2">
