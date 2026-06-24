@@ -117,7 +117,7 @@ export default function AvatarStage({
             relative overflow-hidden
             rounded-[2rem] border border-white/5
             shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)]
-            w-[260px] h-[320px] sm:w-[320px] sm:h-[400px] md:w-[360px] md:h-[460px]
+            w-[232px] h-[290px] sm:w-[320px] sm:h-[400px] md:w-[360px] md:h-[460px]
             transition-transform duration-700
             ${isSpeaking ? "scale-[1.015]" : "scale-100"}
           `}

@@ -5,6 +5,7 @@ import AvatarStage from "@/components/AvatarStage";
 import StatusIndicator from "@/components/StatusIndicator";
 import MicButton from "@/components/MicButton";
 import ChatTranscript from "@/components/ChatTranscript";
+import ChatView from "@/components/ChatView";
 import SettingsPanel from "@/components/SettingsPanel";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { sendChat } from "@/lib/apiClient";
@@ -39,6 +40,7 @@ export default function Page() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"call" | "chat">("call");
 
   // ----- user-configurable settings -----
   const [memory, setMemory] = useState<UserMemory>({});
@@ -108,16 +110,20 @@ export default function Page() {
   // mode, so we don't keep billing for an unused stream. No-op when Simli
   // isn't configured.
   useEffect(() => {
-    if (liveAvatarEnabled) {
+    if (liveAvatarEnabled && viewMode === "call") {
       void liveAvatar.ensureConnected();
     } else {
+      // Image mode or text chat — drop the stream so we don't keep billing.
       liveAvatar.stop();
     }
-  }, [liveAvatarEnabled, liveAvatar.ensureConnected, liveAvatar.stop]);
+  }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
 
   // ----- core flow: send a user turn to the AI -----
+  // `speak` is true for the voice call and false for the text chat, which is
+  // a quiet, text-only conversation over the same history.
   const sendUserMessage = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { speak?: boolean }) => {
+      const shouldSpeak = opts?.speak ?? true;
       const trimmed = text.trim();
       if (!trimmed) return;
 
@@ -153,6 +159,12 @@ export default function Page() {
           timestamp: new Date().toISOString(),
         };
         setMessages((m) => [...m, assistantMsg]);
+
+        // Text chat: no voice, just settle back to idle.
+        if (!shouldSpeak) {
+          setAvatarState("idle");
+          return;
+        }
 
         // Speak the reply. Prefer the live lip-synced avatar; if it isn't
         // available (or fails), fall back to the browser's built-in voice.
@@ -297,6 +309,24 @@ export default function Page() {
     setErrorMessage(null);
   }, [liveAvatar.clear]);
 
+  // ----- text chat (WhatsApp-style, voice off) -----
+  const handleChatSend = useCallback(
+    (text: string) => {
+      // Stop any voice playback so the two modes don't talk over each other.
+      stopSpeaking();
+      liveAvatar.clear();
+      void sendUserMessage(text, { speak: false });
+    },
+    [sendUserMessage, liveAvatar.clear],
+  );
+
+  const openChat = useCallback(() => {
+    stopSpeaking();
+    liveAvatar.clear();
+    if (avatarState === "listening") stopListening();
+    setViewMode("chat");
+  }, [avatarState, stopListening, liveAvatar.clear]);
+
   // ----- cleanup on unmount -----
   useEffect(() => {
     return () => {
@@ -314,31 +344,49 @@ export default function Page() {
 
   return (
     <ErrorBoundary>
-      <main className="relative min-h-screen flex flex-col">
+      <main className="relative min-h-dvh flex flex-col">
         {/* Top bar */}
-        <header className="relative z-10 flex items-center justify-between px-6 sm:px-10 py-5">
+        <header className="relative z-10 flex items-center justify-between px-6 sm:px-10 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
           <div className="flex items-center gap-3">
             <div className="h-7 w-7 rounded-full bg-gradient-to-br from-signal-400 to-signal-600" />
-            <p className="font-display font-semibold text-cream-50 tracking-tight">
-              {assistantDisplayName}
-            </p>
+            <div className="leading-tight">
+              <p className="font-display font-semibold text-cream-50 tracking-tight">
+                {assistantDisplayName}
+              </p>
+              <p className="text-[10px] tracking-[0.18em] uppercase text-cream-100/35">
+                by Vaibhav Rajput
+              </p>
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
-            aria-label="Open settings"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={openChat}
+              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
+              aria-label="Open chat"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
+              aria-label="Open settings"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         {/* Stage */}
-        <section className="relative z-0 flex-1 flex flex-col items-center justify-center px-4 pb-32">
+        <section className="relative z-0 flex-1 min-h-0 flex flex-col items-center justify-center px-4 py-6 overflow-y-auto">
           <AvatarStage
             state={avatarState}
             interimText={interimText}
@@ -359,7 +407,7 @@ export default function Page() {
         </section>
 
         {/* Bottom controls */}
-        <footer className="fixed inset-x-0 bottom-0 z-10 pb-6 px-4">
+        <footer className="relative z-10 shrink-0 px-4 pt-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))]">
           <div className="mx-auto max-w-2xl">
             <div className="flex flex-col items-center gap-4">
               {/* Big primary mic */}
@@ -415,9 +463,24 @@ export default function Page() {
                 Mira is a virtual AI assistant. Your microphone is only used while
                 you&apos;re speaking. Conversations are stored locally in this browser.
               </p>
+
+              <p className="text-[10px] uppercase tracking-[0.2em] text-cream-100/25">
+                Crafted by Vaibhav Rajput
+              </p>
             </div>
           </div>
         </footer>
+
+        {/* WhatsApp-style text chat (full-screen overlay) */}
+        {viewMode === "chat" && (
+          <ChatView
+            messages={messages}
+            assistantName={assistantDisplayName}
+            thinking={avatarState === "thinking"}
+            onSend={handleChatSend}
+            onBack={() => setViewMode("call")}
+          />
+        )}
 
         {/* Side panels */}
         <ChatTranscript

@@ -174,6 +174,10 @@ export default function SettingsPanel({
               Reset conversation & memory
             </button>
           </div>
+
+          <p className="text-center text-[10px] uppercase tracking-[0.2em] text-cream-100/25">
+            Crafted by Vaibhav Rajput
+          </p>
         </div>
       </div>
     </div>

@@ -32,7 +32,7 @@ export default function ChatTranscript({
         shadow-[0_20px_60px_-15px_rgba(0,0,0,0.6)]
         transition-all duration-400 ease-out
         ${expanded
-          ? "w-[320px] sm:w-[360px] h-[60vh] max-h-[520px]"
+          ? "w-[min(360px,calc(100vw-2rem))] h-[60dvh] max-h-[520px]"
           : "w-12 h-12"
         }
         overflow-hidden

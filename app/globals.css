@@ -53,6 +53,18 @@ body::before {
   border-radius: 4px;
 }
 
+/* Typing indicator dots in the text chat */
+@keyframes chatTyping {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
 /* Reduced motion: turn animations into static states */
 @media (prefers-reduced-motion: reduce) {
   *,
