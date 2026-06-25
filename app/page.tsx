@@ -43,8 +43,8 @@ import {
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
 import {
-  playGeminiTts,
-  stopGeminiTts,
+  playServerTts,
+  stopServerTts,
   primeTtsAudio,
   isTtsAudioSupported,
 } from "@/lib/ttsAudio";
@@ -249,7 +249,7 @@ export default function Page() {
   // the Simli buffer).
   const interruptSpeech = useCallback(() => {
     stopSpeaking();
-    stopGeminiTts();
+    stopServerTts();
     liveAvatar.clear();
   }, [liveAvatar.clear]);
 
@@ -276,7 +276,7 @@ export default function Page() {
       if (isTtsAudioSupported()) {
         setAvatarState("speaking");
         try {
-          await playGeminiTts({ text, model: ttsModel, voice: geminiVoice, volume });
+          await playServerTts({ text, model: ttsModel, voice: geminiVoice, volume });
           // Only settle to idle if we're still the speaking turn (a new mic
           // press / vision command may have moved us on).
           setAvatarState((s) => (s === "speaking" ? "idle" : s));
@@ -833,7 +833,7 @@ export default function Page() {
   useEffect(() => {
     return () => {
       stopSpeaking();
-      stopGeminiTts();
+      stopServerTts();
       try {
         recognizerRef.current?.abort();
       } catch {

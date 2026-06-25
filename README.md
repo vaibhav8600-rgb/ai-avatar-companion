@@ -154,12 +154,19 @@ avatar is silently disabled and the still-image experience is used instead.
 
 ### Voice in both modes
 
-Both **Live** and **Still image** modes now speak through the same Gemini TTS
-model chain (`/api/tts`): live mode lip-syncs it on the Simli avatar, still mode
-plays it in-browser via Web Audio. If every TTS model fails — or no vision/TTS
-provider is configured — both fall back to the browser's built-in Web Speech
-voice. The "Avatar voice model" / "Avatar voice" pickers in Settings apply to
-both.
+Both **Live** and **Still image** modes speak through the same 3-tier fallback
+chain (live mode lip-syncs the audio on Simli; still mode plays it via Web
+Audio):
+
+1. **Deepgram Aura** (`/api/tts/deepgram`) — primary, when `DEEPGRAM_API_KEY` is
+   set. Returns raw PCM.
+2. **Gemini TTS** (`/api/tts`) — the Gemini model chain, if Deepgram fails / has
+   no key. Also raw PCM.
+3. **Browser Web Speech** (`speakWithBrowser`) — if both server tiers fail.
+
+Deepgram's voice is set with `DEEPGRAM_TTS_MODEL` (default `aura-2-luna-en`);
+the "Avatar voice model" / "Avatar voice" pickers in Settings apply to the
+Gemini tier.
 
 > **Cost note:** Gemini TTS bills per character and Simli bills per minute of
 > streaming, so each spoken reply costs a little in **both** modes now. If you
@@ -176,6 +183,7 @@ ai-avatar-companion/
 │   ├── api/
 │   │   ├── chat/route.ts          # AI proxy: Anthropic / OpenAI / Google (server only)
 │   │   ├── tts/route.ts           # Gemini text-to-speech → base64 PCM (server only)
+│   │   ├── tts/deepgram/route.ts  # Deepgram Aura TTS → base64 PCM (primary, server only)
 │   │   ├── simli-session/route.ts # Mints a Simli session token (server only)
 │   │   └── vision/analyze/route.ts # Mira Vision: image → structured analysis (server only)
 │   ├── globals.css                # Tailwind + design tokens
