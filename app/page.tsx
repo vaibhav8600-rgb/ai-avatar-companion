@@ -10,7 +10,7 @@ import SettingsPanel from "@/components/SettingsPanel";
 import CameraPanel from "@/components/CameraPanel";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { sendChat } from "@/lib/apiClient";
-import { useCamera } from "@/lib/useCamera";
+import { useCamera, type CameraFacingMode } from "@/lib/useCamera";
 import {
   analyzeImage,
   makeThumbnail,
@@ -52,6 +52,7 @@ import {
   saveLiveVision,
   loadAutoCaptureVision,
   saveAutoCaptureVision,
+  loadPreferredCamera,
 } from "@/lib/memoryManager";
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
 
@@ -250,11 +251,17 @@ export default function Page() {
     [voiceReply],
   );
 
-  const openCamera = useCallback(async () => {
-    primeSpeechSynthesis();
-    setCameraOpen(true);
-    await camera.start();
-  }, [camera]);
+  // Smart default: first time, Vision uses the back camera (objects/desk), the
+  // person flow uses the front camera. Once the user has switched, their saved
+  // preference wins.
+  const openCamera = useCallback(
+    async (intent: CameraFacingMode = "environment") => {
+      primeSpeechSynthesis();
+      setCameraOpen(true);
+      await camera.start({ facingMode: loadPreferredCamera() ?? intent });
+    },
+    [camera],
+  );
 
   const closeCamera = useCallback(() => {
     camera.stop();
@@ -809,7 +816,7 @@ export default function Page() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={openCamera}
+              onClick={() => openCamera()}
               className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
               aria-label="Open camera (Mira Vision)"
             >
@@ -950,6 +957,10 @@ export default function Page() {
             interimText={interimText}
             onMicPress={handleMicPress}
             onMicRelease={handleMicRelease}
+            currentFacingMode={camera.currentFacingMode}
+            canSwitchCamera={camera.availableVideoDevices.length > 1}
+            isSwitchingCamera={camera.isSwitchingCamera}
+            onSwitchCamera={() => void camera.switchCamera()}
           />
         )}
 

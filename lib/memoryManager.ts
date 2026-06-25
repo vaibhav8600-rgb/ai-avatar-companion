@@ -152,3 +152,26 @@ export const loadLiveVision = () => loadBool(LIVE_VISION_KEY, true);
 export const saveLiveVision = (v: boolean) => saveBool(LIVE_VISION_KEY, v);
 export const loadAutoCaptureVision = () => loadBool(AUTO_CAPTURE_KEY, true);
 export const saveAutoCaptureVision = (v: boolean) => saveBool(AUTO_CAPTURE_KEY, v);
+
+// Preferred camera (front "user" / back "environment"), remembered across sessions.
+const PREF_CAMERA_KEY = "mira_preferred_camera";
+
+/** Returns the saved camera preference, or null if the user hasn't chosen yet. */
+export function loadPreferredCamera(): "user" | "environment" | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = localStorage.getItem(PREF_CAMERA_KEY);
+    return v === "environment" || v === "user" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePreferredCamera(mode: "user" | "environment"): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(PREF_CAMERA_KEY, mode);
+  } catch {
+    // ignore
+  }
+}

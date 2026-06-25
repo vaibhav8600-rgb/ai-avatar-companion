@@ -255,8 +255,11 @@ If no vision provider is configured, the analyze route returns a clear error.
 
 ### Using it
 
-Tap the **camera icon** (top right) to open Mira Vision. The manual buttons are
-still there as a fallback:
+Tap the **camera icon** (top right) to open Mira Vision. On phones it opens the
+**back camera by default** (you mostly point it at objects, desks, parcels,
+rooms) and you can **switch between front and back** with the toggle on the
+preview — front is handy for face/person chat. Your choice is remembered for
+next time. The manual buttons are still there as a fallback:
 
 - **Look** — capture a frame; Mira describes the scene and names any learned
   object she recognizes ("That looks like your guitar.").
