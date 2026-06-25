@@ -36,6 +36,12 @@ import {
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
 import {
+  playGeminiTts,
+  stopGeminiTts,
+  primeTtsAudio,
+  isTtsAudioSupported,
+} from "@/lib/ttsAudio";
+import {
   loadMemory,
   saveMemory,
   loadHistory,
@@ -211,15 +217,18 @@ export default function Page() {
   }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
 
   // ----- Mira Vision: speak + respond helpers -----
-  // Immediately silence any current speech (browser + Simli buffer).
+  // Immediately silence any current speech (browser TTS, Gemini TTS audio, and
+  // the Simli buffer).
   const interruptSpeech = useCallback(() => {
     stopSpeaking();
+    stopGeminiTts();
     liveAvatar.clear();
   }, [liveAvatar.clear]);
 
   // THE single voice pipeline used by every reply (chat + all vision flows +
-  // errors): interrupt any current speech, then speak via Simli (if live) or
-  // the browser, returning to idle when done.
+  // errors): interrupt any current speech, then speak via Simli (live mode) or
+  // Gemini TTS (still mode), falling back to the browser's Web Speech API if
+  // the TTS chain fails. Returns to idle when done.
   const voiceReply = useCallback(
     async (text: string) => {
       interruptSpeech();
@@ -232,11 +241,25 @@ export default function Page() {
           liveAvatar.clear();
           speakWithBrowser(text);
         }
-      } else {
-        speakWithBrowser(text);
+        return;
       }
+
+      // Still mode: use the same Gemini TTS model chain, played in-browser.
+      if (isTtsAudioSupported()) {
+        setAvatarState("speaking");
+        try {
+          await playGeminiTts({ text, model: ttsModel, voice: geminiVoice, volume });
+          // Only settle to idle if we're still the speaking turn (a new mic
+          // press / vision command may have moved us on).
+          setAvatarState((s) => (s === "speaking" ? "idle" : s));
+          return;
+        } catch {
+          // Every TTS model failed — fall back to the browser voice.
+        }
+      }
+      speakWithBrowser(text);
     },
-    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
   );
 
   /** Add an assistant message and speak it. */
@@ -257,6 +280,7 @@ export default function Page() {
   const openCamera = useCallback(
     async (intent: CameraFacingMode = "environment") => {
       primeSpeechSynthesis();
+      primeTtsAudio();
       setCameraOpen(true);
       await camera.start({ facingMode: loadPreferredCamera() ?? intent });
     },
@@ -649,8 +673,7 @@ export default function Page() {
     }
 
     // Stop any currently-playing audio so she doesn't talk over the user.
-    stopSpeaking();
-    liveAvatar.clear();
+    interruptSpeech();
 
     wasManualStopRef.current = false;
     const recognizer = createRecognizer({
@@ -686,7 +709,7 @@ export default function Page() {
     } catch {
       // start() throws if already started; ignore.
     }
-  }, [sendUserMessage, liveAvatar.clear]);
+  }, [sendUserMessage, interruptSpeech]);
 
   const stopListening = useCallback(() => {
     wasManualStopRef.current = true;
@@ -701,20 +724,20 @@ export default function Page() {
     // Unlock mobile speech within this user gesture so the reply can be spoken
     // later (after the async AI call, which is outside any gesture).
     primeSpeechSynthesis();
+    primeTtsAudio();
     if (pushToTalk) {
       startListening();
     } else {
       if (avatarState === "listening") {
         stopListening();
       } else if (avatarState === "speaking") {
-        stopSpeaking();
-        liveAvatar.clear();
+        interruptSpeech();
         setAvatarState("idle");
       } else {
         startListening();
       }
     }
-  }, [avatarState, pushToTalk, startListening, stopListening, liveAvatar.clear]);
+  }, [avatarState, pushToTalk, startListening, stopListening, interruptSpeech]);
 
   const handleMicRelease = useCallback(() => {
     if (pushToTalk) {
@@ -731,24 +754,23 @@ export default function Page() {
       setTextDraft("");
       // Unlock mobile speech within this gesture before the async reply.
       primeSpeechSynthesis();
-      stopSpeaking();
+      primeTtsAudio();
+      interruptSpeech();
       void sendUserMessage(text);
     },
-    [textDraft, sendUserMessage],
+    [textDraft, sendUserMessage, interruptSpeech],
   );
 
   // ----- stop speaking -----
   const handleStopSpeaking = useCallback(() => {
-    stopSpeaking();
-    liveAvatar.clear();
+    interruptSpeech();
     setAvatarState("idle");
-  }, [liveAvatar.clear]);
+  }, [interruptSpeech]);
 
   // ----- reset -----
   const handleReset = useCallback(() => {
     abortRef.current?.abort();
-    stopSpeaking();
-    liveAvatar.clear();
+    interruptSpeech();
     try {
       recognizerRef.current?.abort();
     } catch {
@@ -761,30 +783,29 @@ export default function Page() {
     setAvatarState("idle");
     setInterimText("");
     setErrorMessage(null);
-  }, [liveAvatar.clear]);
+  }, [interruptSpeech]);
 
   // ----- text chat (WhatsApp-style, voice off) -----
   const handleChatSend = useCallback(
     (text: string) => {
       // Stop any voice playback so the two modes don't talk over each other.
-      stopSpeaking();
-      liveAvatar.clear();
+      interruptSpeech();
       void sendUserMessage(text, { speak: false });
     },
-    [sendUserMessage, liveAvatar.clear],
+    [sendUserMessage, interruptSpeech],
   );
 
   const openChat = useCallback(() => {
-    stopSpeaking();
-    liveAvatar.clear();
+    interruptSpeech();
     if (avatarState === "listening") stopListening();
     setViewMode("chat");
-  }, [avatarState, stopListening, liveAvatar.clear]);
+  }, [avatarState, stopListening, interruptSpeech]);
 
   // ----- cleanup on unmount -----
   useEffect(() => {
     return () => {
       stopSpeaking();
+      stopGeminiTts();
       try {
         recognizerRef.current?.abort();
       } catch {

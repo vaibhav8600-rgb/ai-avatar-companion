@@ -152,9 +152,19 @@ The avatar's voice reuses your **`GOOGLE_API_KEY`** for TTS, so no extra key is
 needed beyond Simli. When `SIMLI_API_KEY` / `SIMLI_FACE_ID` are absent, the live
 avatar is silently disabled and the still-image experience is used instead.
 
-> **Cost note:** Simli bills per minute of avatar streaming and Gemini TTS bills
-> per character, so each spoken reply in live mode costs a small amount. Switch
-> to **Still image** in Settings to use the free browser voice.
+### Voice in both modes
+
+Both **Live** and **Still image** modes now speak through the same Gemini TTS
+model chain (`/api/tts`): live mode lip-syncs it on the Simli avatar, still mode
+plays it in-browser via Web Audio. If every TTS model fails — or no vision/TTS
+provider is configured — both fall back to the browser's built-in Web Speech
+voice. The "Avatar voice model" / "Avatar voice" pickers in Settings apply to
+both.
+
+> **Cost note:** Gemini TTS bills per character and Simli bills per minute of
+> streaming, so each spoken reply costs a little in **both** modes now. If you
+> prefer the free browser voice, leave `GOOGLE_API_KEY` unset (or it'll be used
+> for TTS). Text **chat** mode stays silent and free.
 
 ---
 
