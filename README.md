@@ -69,6 +69,10 @@ microphone permission, and speak.
 | Chat | Shares the same history as the call; text-only (no voice) | ✅ |
 | PWA | Installable, standalone, offline app-shell caching, app icons | ✅ |
 | Mobile | Responsive with safe-area insets, `dvh` sizing, keyboard-aware chat | ✅ |
+| Vision | **Mira Vision** — camera sight, describe scenes, teach/recognize objects | ✅ |
+| Vision | Opt-in known-person enrollment (consent-gated); strangers never identified | ✅ |
+| Vision | Local visual memory (IndexedDB), managed in Settings | ✅ |
+| Vision | **Live Vision Conversation** — voice-first; auto-captures only when asked | ✅ |
 
 ---
 
@@ -162,7 +166,8 @@ ai-avatar-companion/
 │   ├── api/
 │   │   ├── chat/route.ts          # AI proxy: Anthropic / OpenAI / Google (server only)
 │   │   ├── tts/route.ts           # Gemini text-to-speech → base64 PCM (server only)
-│   │   └── simli-session/route.ts # Mints a Simli session token (server only)
+│   │   ├── simli-session/route.ts # Mints a Simli session token (server only)
+│   │   └── vision/analyze/route.ts # Mira Vision: image → structured analysis (server only)
 │   ├── globals.css                # Tailwind + design tokens
 │   ├── layout.tsx
 │   └── page.tsx                   # Main UI & conversation orchestrator
@@ -172,7 +177,9 @@ ai-avatar-companion/
 │   ├── StatusIndicator.tsx        # Status pill: Ready / Listening / Speaking…
 │   ├── MicButton.tsx              # Mic UI (push-to-talk or click-to-talk)
 │   ├── ChatTranscript.tsx         # Collapsible right-side transcript
-│   ├── SettingsPanel.tsx          # Name, volume, voice, avatar mode, mic mode, reset
+│   ├── SettingsPanel.tsx          # Name, volume, voice, avatar mode, mic mode, vision, reset
+│   ├── CameraPanel.tsx            # Mira Vision camera UI (Look / Teach / Close)
+│   ├── VisionMemoryPanel.tsx      # Manage learned objects/people (Settings)
 │   ├── ServiceWorkerRegistrar.tsx # Registers the PWA service worker (prod only)
 │   └── ErrorBoundary.tsx
 ├── lib/
@@ -181,6 +188,10 @@ ai-avatar-companion/
 │   ├── speechSynthesis.ts         # SpeechSynthesis wrapper + voice picker (fallback TTS)
 │   ├── audio.ts                   # Base64 PCM decode + resample to 16kHz for Simli
 │   ├── useSimliAvatar.ts          # Live avatar lifecycle hook (connect/speak/clear/stop)
+│   ├── useCamera.ts               # getUserMedia camera hook + frame capture
+│   ├── visionClient.ts            # Vision analyze fetch + thumbnail + matching
+│   ├── visionIntentRouter.ts      # Classifies a turn into a vision intent
+│   ├── visualMemory.ts            # IndexedDB visual-memory store (CRUD + export/import)
 │   └── memoryManager.ts           # localStorage persistence
 ├── scripts/
 │   └── generate-icons.mjs         # Zero-dependency PWA icon generator
@@ -226,6 +237,85 @@ ai-avatar-companion/
 - Browser **Web Speech API** for speech-to-text and fallback text-to-speech
 - AI providers via plain `fetch` (Anthropic Messages, OpenAI Chat Completions,
   Gemini `generateContent`) — no heavy SDKs in the request path
+
+---
+
+## Mira Vision
+
+Mira can see through your camera, describe what she sees, learn objects, and
+recognize them later. It's fully modular and opt-in — the camera never starts on
+its own.
+
+### Setup
+
+No extra keys: vision reuses your existing **`GOOGLE_API_KEY`** (Gemini vision)
+or **`OPENAI_API_KEY`** (OpenAI vision), chosen the same way as `AI_PROVIDER`.
+Optionally override the model with `GEMINI_VISION_MODEL` / `OPENAI_VISION_MODEL`.
+If no vision provider is configured, the analyze route returns a clear error.
+
+### Using it
+
+Tap the **camera icon** (top right) to open Mira Vision. The manual buttons are
+still there as a fallback:
+
+- **Look** — capture a frame; Mira describes the scene and names any learned
+  object she recognizes ("That looks like your guitar.").
+- **Teach object** — capture → label + notes → saved to local visual memory.
+- **Teach person** — *opt-in, consent-gated.* Confirm permission, capture 3
+  angles, add a name/context.
+- **Close camera** — stops the stream immediately.
+
+### Live Vision Conversation Mode (voice-first)
+
+Once the camera is on, you don't need the buttons — **just talk** and Mira
+captures a frame automatically when your words call for it. Every reply comes
+back through the normal voice/avatar pipeline (Simli or browser TTS), not just
+the screen. The header shows a **Live Vision** badge and a status line
+("Looking now", "Recognizing", "I need a label"…).
+
+Each turn is classified ([lib/visionIntentRouter.ts](lib/visionIntentRouter.ts))
+into one of: `normal_chat`, `describe_current_view`, `remember_current_object`,
+`recognize_current_view`, `remember_current_person`, `recognize_known_person`,
+`forget_visual_memory`. Only vision intents touch the camera; normal chat never
+does.
+
+Examples:
+
+- "What do you see?" / "What's on my desk?" → captures + describes the scene.
+- "Remember this as my black keyboard." → captures, saves the object, confirms
+  by voice. (No label? She asks "What should I remember this as?")
+- "Do you remember this?" → captures and compares to your saved objects.
+- "Who is this?" → only recognizes enrolled people; otherwise "I see a person,
+  but I don't recognize them."
+- "This is my friend Amit, remember him." → asks for consent first, then saves
+  on your confirmation.
+- "Forget my keyboard." → deletes that memory.
+
+Toggles in **Settings → Mira Vision**: *Live Vision conversation*,
+*Auto-capture for vision questions*, *Known-person recognition* (off by
+default), and *Ask before saving a person* (always on).
+
+### How matching works (MVP)
+
+The current version is intentionally simple: the vision model compares the live
+frame against your saved memories' labels/descriptions, and Mira matches by
+label/keyword weighted by the model's confidence. If unsure, she says so rather
+than guessing. A future improvement is multimodal embeddings for more robust
+matching.
+
+### Privacy & safety
+
+- The camera **never starts automatically** — only after you tap to open it, and
+  a red "Camera on" indicator is shown while it's live.
+- **No video is persisted.** Only still thumbnails *you* capture are saved, in
+  your browser's IndexedDB (managed in **Settings → Mira Vision → Manage visual
+  memories**: view, rename, delete, export/import JSON).
+- **Strangers are never identified.** Person recognition is **off by default**
+  and only matches people you explicitly enrolled with consent. If unsure, Mira
+  says "I see a person" rather than guessing an identity.
+- Frames are sent to your configured vision provider (Google/OpenAI) only when
+  you capture; API keys stay server-side and raw provider errors are never
+  exposed to the browser.
 
 ---
 

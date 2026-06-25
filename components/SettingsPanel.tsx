@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getVoices, pickDefaultVoice } from "@/lib/speechSynthesis";
 import { TTS_MODEL_OPTIONS, GEMINI_VOICE_OPTIONS } from "@/lib/ttsModels";
+import VisionMemoryPanel from "@/components/VisionMemoryPanel";
 import type { UserMemory } from "@/types";
 
 interface SettingsPanelProps {
@@ -26,6 +27,15 @@ interface SettingsPanelProps {
   /** Selected Gemini voice persona ("" = Default). */
   geminiVoice: string;
   onGeminiVoiceChange: (voice: string) => void;
+  /** Mira Vision: known-person recognition toggle. */
+  knownPersonRecognition: boolean;
+  onKnownPersonRecognitionChange: (v: boolean) => void;
+  /** Live Vision Conversation mode (voice-driven camera). */
+  liveVisionEnabled: boolean;
+  onLiveVisionChange: (v: boolean) => void;
+  /** Auto-capture a frame for vision questions. */
+  autoCaptureVision: boolean;
+  onAutoCaptureVisionChange: (v: boolean) => void;
   onResetConversation: () => void;
 }
 
@@ -47,9 +57,16 @@ export default function SettingsPanel({
   onTtsModelChange,
   geminiVoice,
   onGeminiVoiceChange,
+  knownPersonRecognition,
+  onKnownPersonRecognitionChange,
+  liveVisionEnabled,
+  onLiveVisionChange,
+  autoCaptureVision,
+  onAutoCaptureVisionChange,
   onResetConversation,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [visionMemoryOpen, setVisionMemoryOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +88,7 @@ export default function SettingsPanel({
   if (!open) return null;
 
   return (
+    <>
     <div
       className="fixed inset-0 z-30 grid place-items-center bg-ink-900/70 backdrop-blur-sm animate-fade-up p-4"
       onClick={onClose}
@@ -207,6 +225,50 @@ export default function SettingsPanel({
             </div>
           </Field>
 
+          <div className="space-y-3">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-cream-100/50">
+              Mira Vision
+            </span>
+            <ToggleRow
+              label="Live Vision conversation"
+              hint="Talk to the camera — “What do you see?”, “Remember this as…”"
+              checked={liveVisionEnabled}
+              onChange={onLiveVisionChange}
+            />
+            <ToggleRow
+              label="Auto-capture for vision questions"
+              hint="Grab a frame automatically when you ask about the view"
+              checked={autoCaptureVision}
+              onChange={onAutoCaptureVisionChange}
+            />
+            <ToggleRow
+              label="Known-person recognition"
+              hint="Only matches people you enrolled with consent"
+              checked={knownPersonRecognition}
+              onChange={onKnownPersonRecognitionChange}
+            />
+            <div className="flex items-center justify-between gap-3 opacity-70">
+              <div>
+                <p className="text-sm text-cream-100/80">Ask before saving a person</p>
+                <p className="text-[10px] text-cream-100/40">Always on for privacy</p>
+              </div>
+              <span className="text-[11px] uppercase tracking-wider text-signal-400">Always</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setVisionMemoryOpen(true)}
+              className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-cream-100 text-sm hover:bg-white/[0.06] text-left"
+            >
+              Manage visual memories…
+            </button>
+            <p className="text-[10px] leading-relaxed text-cream-100/40">
+              Mira can see through your camera only when you open it. Images stay
+              on this device; nothing is sent unless you capture a frame. She
+              never identifies strangers — known-person recognition is opt-in.
+            </p>
+          </div>
+
           <div className="pt-2 border-t border-white/[0.05]">
             <button
               type="button"
@@ -228,6 +290,41 @@ export default function SettingsPanel({
         </div>
       </div>
     </div>
+
+    <VisionMemoryPanel
+      open={visionMemoryOpen}
+      onClose={() => setVisionMemoryOpen(false)}
+      knownPersonRecognition={knownPersonRecognition}
+      onKnownPersonRecognitionChange={onKnownPersonRecognitionChange}
+    />
+    </>
+  );
+}
+
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 cursor-pointer">
+      <span>
+        <span className="block text-sm text-cream-100/80">{label}</span>
+        {hint && <span className="block text-[10px] text-cream-100/40">{hint}</span>}
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="accent-signal-500 h-4 w-4 shrink-0"
+      />
+    </label>
   );
 }
 

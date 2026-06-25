@@ -15,9 +15,17 @@ export const runtime = "nodejs";
 
 // ----- system prompt -----
 
-function buildSystemPrompt(assistantName: string, persona: string, memory?: UserMemory): string {
+function buildSystemPrompt(
+  assistantName: string,
+  persona: string,
+  memory?: UserMemory,
+  visionContext?: string,
+): string {
   const memoryBlock = memory && Object.keys(memory).length > 0
     ? `\n\nThings you remember about this person (use naturally, do not list them back):\n${formatMemory(memory)}`
+    : "";
+  const visionBlock = visionContext
+    ? `\n\nThe camera currently sees: ${visionContext}\nUse this only if the person refers to what they're showing you. Do not identify unknown people.`
     : "";
 
   return [
@@ -33,6 +41,7 @@ function buildSystemPrompt(assistantName: string, persona: string, memory?: User
     "- If the person asks for something you cannot do (browse the web, run code, control devices), say so briefly and offer what you can do instead.",
     "- Avoid filler like 'As an AI...' Just answer.",
     memoryBlock,
+    visionBlock,
   ].join("\n");
 }
 
@@ -184,7 +193,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const assistantName = process.env.ASSISTANT_NAME || "Mira";
   const persona = process.env.ASSISTANT_PERSONA || "warm, intelligent, professional, gently playful";
   const provider = (process.env.AI_PROVIDER || "anthropic").toLowerCase();
-  const system = buildSystemPrompt(assistantName, persona, body.memory);
+  const system = buildSystemPrompt(assistantName, persona, body.memory, body.visionContext);
 
   const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
   const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);

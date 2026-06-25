@@ -6,7 +6,13 @@ export type AvatarState =
   | "thinking"    // request sent to AI, waiting for reply
   | "speaking"    // playing AI's voice reply
   | "error"       // something went wrong / offline
-  | "muted";      // mic explicitly muted by user
+  | "muted"       // mic explicitly muted by user
+  // ----- Mira Vision states -----
+  | "looking"     // camera frame captured, analyzing the scene
+  | "learning"    // teaching Mira an object/person
+  | "recognizing" // comparing a frame against learned memories
+  | "recognized"  // a confident match was found
+  | "uncertain";  // saw something familiar but not sure
 
 export type Role = "user" | "assistant";
 
@@ -31,6 +37,47 @@ export interface ChatRequest {
   messages: { role: Role; content: string }[];
   /** Optional memory snippet to inject into the system prompt. */
   memory?: UserMemory;
+  /** Optional "what the camera currently sees" context for this turn. */
+  visionContext?: string;
+}
+
+// ----- Mira Vision -----
+
+export type VisionMode = "scene" | "object" | "person" | "recognition";
+
+export interface VisionRequest {
+  imageBase64: string;
+  prompt: string;
+  mode: VisionMode;
+}
+
+export interface VisionResult {
+  description: string;
+  objects: string[];
+  peopleCount: number;
+  textVisible: string;
+  safetyNotes: string;
+  confidence: number;
+}
+
+export type VisualMemoryType = "object" | "person" | "place" | "note";
+
+/** A learned visual memory, stored client-side (IndexedDB). */
+export interface VisualMemory {
+  id: string;
+  type: VisualMemoryType;
+  label: string;
+  description: string;
+  /** Small JPEG thumbnail (data URL) chosen by the user. */
+  thumbnailBase64: string;
+  /** Extra thumbnails for people enrolled from multiple angles. */
+  extraThumbnails?: string[];
+  createdAt: string;
+  updatedAt: string;
+  tags: string[];
+  /** People are only stored with explicit consent. */
+  consented: boolean;
+  confidenceThreshold: number;
 }
 
 export interface ChatResponse {

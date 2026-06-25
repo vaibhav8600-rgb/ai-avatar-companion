@@ -102,3 +102,53 @@ export function saveGeminiVoice(voice: string): void {
     // ignore
   }
 }
+
+// --- Mira Vision: known-person recognition (off by default) ---
+
+const KNOWN_PERSON_KEY = "aac:knownPersonRecognition:v1";
+
+export function loadKnownPersonRecognition(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(KNOWN_PERSON_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveKnownPersonRecognition(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(KNOWN_PERSON_KEY, String(enabled));
+  } catch {
+    // ignore
+  }
+}
+
+// Generic boolean setting helper (default-aware) for Live Vision toggles.
+function loadBool(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function saveBool(key: string, value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // ignore
+  }
+}
+
+const LIVE_VISION_KEY = "aac:liveVision:v1";
+const AUTO_CAPTURE_KEY = "aac:autoCaptureVision:v1";
+
+export const loadLiveVision = () => loadBool(LIVE_VISION_KEY, true);
+export const saveLiveVision = (v: boolean) => saveBool(LIVE_VISION_KEY, v);
+export const loadAutoCaptureVision = () => loadBool(AUTO_CAPTURE_KEY, true);
+export const saveAutoCaptureVision = (v: boolean) => saveBool(AUTO_CAPTURE_KEY, v);

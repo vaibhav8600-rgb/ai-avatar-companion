@@ -36,6 +36,11 @@ export default function AvatarStage({
   const isListening = state === "listening";
   const isThinking = state === "thinking";
   const isError = state === "error";
+  // Mira Vision states share a "scanning" aura — signal-blue while looking /
+  // recognizing, warm while learning or unsure.
+  const isVisionActive = state === "looking" || state === "recognizing";
+  const isVisionWarm = state === "learning" || state === "uncertain";
+  const isRecognized = state === "recognized";
 
   // Track whether the live video is actually rendering frames, so we can keep a
   // loader up until her face is really on screen (not just "connected").
@@ -119,6 +124,45 @@ export default function AvatarStage({
             style={{
               background:
                 "radial-gradient(circle, rgba(220,90,90,0.35), transparent 65%)",
+            }}
+            aria-hidden
+          />
+        )}
+
+        {/* Mira Vision — scanning shimmer (signal blue) */}
+        {isVisionActive && (
+          <div
+            className="aura-ring is-active"
+            style={{
+              background:
+                "conic-gradient(from 0deg, rgba(125,179,216,0.4), rgba(163,208,236,0.15), rgba(125,179,216,0.4))",
+              animation: "spin 3s linear infinite, shimmer 1.8s ease-in-out infinite",
+            }}
+            aria-hidden
+          />
+        )}
+
+        {/* Learning / uncertain — warm shimmer */}
+        {isVisionWarm && (
+          <div
+            className="aura-ring is-active"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(232,192,136,0.38), transparent 65%)",
+              animation: "shimmer 2s ease-in-out infinite",
+            }}
+            aria-hidden
+          />
+        )}
+
+        {/* Recognized — confident signal pulse */}
+        {isRecognized && (
+          <div
+            className="aura-ring is-active"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(125,179,216,0.5), transparent 60%)",
+              animation: "pulse 1s ease-in-out infinite",
             }}
             aria-hidden
           />
