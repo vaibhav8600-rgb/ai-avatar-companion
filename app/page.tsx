@@ -7,8 +7,23 @@ import MicButton from "@/components/MicButton";
 import ChatTranscript from "@/components/ChatTranscript";
 import ChatView from "@/components/ChatView";
 import SettingsPanel from "@/components/SettingsPanel";
+import CameraPanel from "@/components/CameraPanel";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { sendChat } from "@/lib/apiClient";
+import { useCamera } from "@/lib/useCamera";
+import {
+  analyzeImage,
+  makeThumbnail,
+  buildRecognitionPrompt,
+  matchMemory,
+} from "@/lib/visionClient";
+import {
+  saveMemory as saveVisualMemory,
+  listMemories,
+  searchMemories,
+  deleteMemory as deleteVisualMemory,
+} from "@/lib/visualMemory";
+import { detectVisionIntent } from "@/lib/visionIntentRouter";
 import {
   createRecognizer,
   isSpeechRecognitionSupported,
@@ -31,10 +46,22 @@ import {
   saveTtsModel,
   loadGeminiVoice,
   saveGeminiVoice,
+  loadKnownPersonRecognition,
+  saveKnownPersonRecognition,
+  loadLiveVision,
+  saveLiveVision,
+  loadAutoCaptureVision,
+  saveAutoCaptureVision,
 } from "@/lib/memoryManager";
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
 
 const ASSISTANT_NAME = "Mira"; // mirrors ASSISTANT_NAME default; UI label only
+
+// Labels are stored as the user said them ("my office laptop"); when Mira
+// speaks she says "your office laptop" rather than "your my office laptop".
+function spokenLabel(label: string): string {
+  return label.replace(/^my\s+/i, "");
+}
 
 export default function Page() {
   // ----- core state -----
@@ -58,6 +85,31 @@ export default function Page() {
   const [ttsModel, setTtsModel] = useState("");
   // User-selected Gemini voice persona ("" = server default).
   const [geminiVoice, setGeminiVoice] = useState("");
+
+  // ----- Mira Vision -----
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [knownPersonRecognition, setKnownPersonRecognition] = useState(false);
+  const [liveVisionEnabled, setLiveVisionEnabled] = useState(true);
+  const [autoCaptureVision, setAutoCaptureVision] = useState(true);
+  // Short status text for the camera panel ("Looking now", "I need a label", …)
+  const [visionStatus, setVisionStatus] = useState("Camera ready");
+  // What the camera last saw, injected into the next chat turn (ref avoids
+  // re-renders / dependency churn).
+  const pendingVisionContextRef = useRef("");
+  // Follow-up the next utterance should answer (label / person name / consent).
+  const pendingVisionRef = useRef<
+    | null
+    | { kind: "object-label"; frame: string }
+    | { kind: "person-name"; frame: string }
+    | { kind: "person-consent"; frame: string; name: string }
+  >(null);
+  const camera = useCamera();
+  // Live, closure-safe view of whether the camera is actually streaming.
+  const cameraActiveRef = useRef(false);
+  useEffect(() => {
+    cameraActiveRef.current = cameraOpen && camera.status === "active";
+  }, [cameraOpen, camera.status]);
 
   // ----- refs (don't trigger re-renders) -----
   const recognizerRef = useRef<ReturnType<typeof createRecognizer> | null>(null);
@@ -104,7 +156,22 @@ export default function Page() {
     setMessages(loadHistory());
     setTtsModel(loadTtsModel());
     setGeminiVoice(loadGeminiVoice());
+    setKnownPersonRecognition(loadKnownPersonRecognition());
+    setLiveVisionEnabled(loadLiveVision());
+    setAutoCaptureVision(loadAutoCaptureVision());
   }, []);
+
+  useEffect(() => {
+    saveKnownPersonRecognition(knownPersonRecognition);
+  }, [knownPersonRecognition]);
+
+  useEffect(() => {
+    saveLiveVision(liveVisionEnabled);
+  }, [liveVisionEnabled]);
+
+  useEffect(() => {
+    saveAutoCaptureVision(autoCaptureVision);
+  }, [autoCaptureVision]);
 
   useEffect(() => {
     saveTtsModel(ttsModel);
@@ -142,6 +209,342 @@ export default function Page() {
     }
   }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
 
+  // ----- Mira Vision: speak + respond helpers -----
+  const voiceReply = useCallback(
+    async (text: string) => {
+      const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
+      if (live) {
+        setAvatarState("speaking");
+        try {
+          await liveAvatar.speak(text, ttsModel, geminiVoice);
+        } catch {
+          liveAvatar.clear();
+          speakWithBrowser(text);
+        }
+      } else {
+        speakWithBrowser(text);
+      }
+    },
+    [liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+  );
+
+  /** Add an assistant message and speak it. */
+  const speakMiraResponse = useCallback(
+    (text: string) => {
+      setMessages((m) => [
+        ...m,
+        { id: crypto.randomUUID(), role: "assistant", content: text, timestamp: new Date().toISOString() },
+      ]);
+      void voiceReply(text);
+    },
+    [voiceReply],
+  );
+
+  const openCamera = useCallback(async () => {
+    primeSpeechSynthesis();
+    setCameraOpen(true);
+    await camera.start();
+  }, [camera]);
+
+  const closeCamera = useCallback(() => {
+    camera.stop();
+    setCameraOpen(false);
+    pendingVisionRef.current = null;
+    pendingVisionContextRef.current = "";
+    setVisionStatus("Camera ready");
+    setAvatarState((s) =>
+      ["looking", "recognizing", "learning", "recognized", "uncertain"].includes(s) ? "idle" : s,
+    );
+  }, [camera]);
+
+  // "Look" — describe the scene and recognize learned objects.
+  const handleLook = useCallback(async () => {
+    const frame = camera.capture();
+    if (!frame) {
+      speakMiraResponse("I couldn't capture the camera image — is the camera on?");
+      return;
+    }
+    setVisionBusy(true);
+    setAvatarState("recognizing");
+    try {
+      const memories = await listMemories();
+      const prompt = buildRecognitionPrompt(memories, "object");
+      const result = await analyzeImage(frame, "recognition", prompt);
+      pendingVisionContextRef.current = result.description;
+      const match = matchMemory(result, memories, "object");
+      if (match && match.confidence >= 0.6) {
+        setAvatarState("recognized");
+        speakMiraResponse(`That looks like your ${spokenLabel(match.memory.label)}. ${result.description}`);
+      } else if (match) {
+        setAvatarState("uncertain");
+        speakMiraResponse(`I see something similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure. ${result.description}`);
+      } else {
+        setAvatarState("idle");
+        speakMiraResponse(result.description);
+      }
+    } catch (e) {
+      setAvatarState("idle");
+      speakMiraResponse(e instanceof Error ? e.message : "Sorry, I couldn't analyze that.");
+    } finally {
+      setVisionBusy(false);
+    }
+  }, [camera, speakMiraResponse]);
+
+  const handleTeachObjectSave = useCallback(
+    async (frame: string, label: string, notes: string) => {
+      setVisionBusy(true);
+      setAvatarState("learning");
+      try {
+        const result = await analyzeImage(frame, "object", `Describe this object the user calls "${label}".`);
+        const thumb = await makeThumbnail(frame);
+        const description = [result.description, notes && `Notes: ${notes}`].filter(Boolean).join(" ");
+        await saveVisualMemory({ type: "object", label, description, thumbnailBase64: thumb, tags: [] });
+        speakMiraResponse(`Got it, I'll remember this as your ${spokenLabel(label)}.`);
+      } catch {
+        speakMiraResponse("Sorry, I couldn't save that object. Try again?");
+      } finally {
+        setVisionBusy(false);
+        setAvatarState("idle");
+      }
+    },
+    [speakMiraResponse],
+  );
+
+  const handleTeachPersonSave = useCallback(
+    async (frames: string[], name: string, context: string) => {
+      setVisionBusy(true);
+      setAvatarState("learning");
+      try {
+        const thumbs = await Promise.all(frames.map((f) => makeThumbnail(f)));
+        const result = await analyzeImage(
+          frames[0],
+          "person",
+          "Describe generic appearance to help re-recognition later. Do not guess identity.",
+        );
+        const description = [context, result.description].filter(Boolean).join(" — ");
+        await saveVisualMemory({
+          type: "person",
+          label: name,
+          description,
+          thumbnailBase64: thumbs[0],
+          extraThumbnails: thumbs.slice(1),
+          consented: true,
+        });
+        speakMiraResponse(`Okay — I've saved ${name} as a known person, with your consent. You can remove this anytime in Settings.`);
+      } catch {
+        speakMiraResponse("Sorry, I couldn't save that.");
+      } finally {
+        setVisionBusy(false);
+        setAvatarState("idle");
+      }
+    },
+    [speakMiraResponse],
+  );
+
+  const handleForget = useCallback(
+    async (label: string) => {
+      const exact = (await listMemories()).find(
+        (m) => m.label.toLowerCase() === label.toLowerCase(),
+      );
+      const found = exact || (await searchMemories(label))[0];
+      if (found) {
+        await deleteVisualMemory(found.id);
+        speakMiraResponse(`Okay, I've forgotten ${found.label}.`);
+      } else {
+        speakMiraResponse(`I don't have anything saved as "${label}".`);
+      }
+    },
+    [speakMiraResponse],
+  );
+
+  // ----- Live Vision Conversation: route a spoken/typed turn -----
+  // Returns "done" if fully handled (skip chat), or "chat" to continue to the
+  // normal /api/chat turn (optionally with a freshly-set camera context).
+  const routeVisionTurn = useCallback(
+    async (transcript: string): Promise<"done" | "chat"> => {
+      // 1) Resolve a pending follow-up (label / name / consent) first.
+      const pending = pendingVisionRef.current;
+      if (pending) {
+        pendingVisionRef.current = null;
+        const ans = transcript.trim();
+        const affirmative = /\b(yes|yeah|yep|sure|ok|okay|confirm|do it|please|go ahead|save)\b/i.test(ans);
+        if (pending.kind === "object-label") {
+          // Keep a leading "my"; only drop a/an/the. Spoken form strips "my".
+          const label = ans.replace(/[.?!,]+$/g, "").replace(/^(a|an|the)\s+/i, "").trim();
+          if (!label) {
+            speakMiraResponse("Okay, never mind.");
+          } else {
+            await handleTeachObjectSave(pending.frame, label, "");
+          }
+          setVisionStatus("Camera ready");
+          return "done";
+        }
+        if (pending.kind === "person-name") {
+          const name = ans.replace(/[.?!,]+$/g, "").trim();
+          if (!name) {
+            speakMiraResponse("Okay, never mind.");
+            setVisionStatus("Camera ready");
+            return "done";
+          }
+          pendingVisionRef.current = { kind: "person-consent", frame: pending.frame, name };
+          setVisionStatus("Confirm to save person");
+          speakMiraResponse(`I can remember known people only with permission. Should I save this person as ${name}?`);
+          return "done";
+        }
+        if (pending.kind === "person-consent") {
+          if (affirmative) {
+            await handleTeachPersonSave([pending.frame], pending.name, "");
+          } else {
+            speakMiraResponse("Okay, I won't save them.");
+          }
+          setVisionStatus("Camera ready");
+          return "done";
+        }
+      }
+
+      // 2) Classify intent.
+      const det = detectVisionIntent(transcript);
+      if (det.intent === "normal_chat") return "chat";
+
+      // 3) Capture a frame if the intent needs the camera.
+      let frame = "";
+      if (det.needsCamera) {
+        try {
+          frame = await camera.captureCurrentCameraFrame();
+        } catch (e) {
+          speakMiraResponse(e instanceof Error ? e.message : "I can't see right now.");
+          return "done";
+        }
+      }
+
+      switch (det.intent) {
+        case "describe_current_view": {
+          setVisionStatus("Looking now");
+          setAvatarState("looking");
+          try {
+            const result = await analyzeImage(frame, "scene", "Describe what you see, briefly and naturally.");
+            pendingVisionContextRef.current = result.description;
+            setVisionStatus("Camera ready");
+            return "chat"; // let /api/chat phrase the reply with the camera context
+          } catch (err) {
+            setAvatarState("idle");
+            setVisionStatus("Camera ready");
+            speakMiraResponse(err instanceof Error ? err.message : "Sorry, I couldn't see clearly.");
+            return "done";
+          }
+        }
+
+        case "recognize_current_view": {
+          setVisionStatus("Recognizing");
+          setAvatarState("recognizing");
+          setVisionBusy(true);
+          try {
+            const memories = await listMemories();
+            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "object"));
+            pendingVisionContextRef.current = result.description;
+            const match = matchMemory(result, memories, "object");
+            if (match && match.confidence >= 0.6) {
+              setAvatarState("recognized");
+              speakMiraResponse(`That looks like your ${spokenLabel(match.memory.label)}.`);
+            } else if (match) {
+              setAvatarState("uncertain");
+              speakMiraResponse(`It looks similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure.`);
+            } else {
+              setAvatarState("idle");
+              speakMiraResponse("I don't recognize this yet. You can say “Remember this as…” and I'll save it.");
+            }
+          } catch {
+            setAvatarState("idle");
+            speakMiraResponse("Sorry, I couldn't analyze that.");
+          } finally {
+            setVisionBusy(false);
+            setVisionStatus("Camera ready");
+          }
+          return "done";
+        }
+
+        case "remember_current_object": {
+          if (!det.label) {
+            pendingVisionRef.current = { kind: "object-label", frame };
+            setVisionStatus("I need a label");
+            speakMiraResponse("What should I remember this as?");
+            return "done";
+          }
+          setVisionStatus("Remembering object");
+          await handleTeachObjectSave(frame, det.label, "");
+          setVisionStatus("Camera ready");
+          return "done";
+        }
+
+        case "remember_current_person": {
+          if (!det.label) {
+            pendingVisionRef.current = { kind: "person-name", frame };
+            setVisionStatus("I need a name");
+            speakMiraResponse("Sure — what's their name?");
+            return "done";
+          }
+          // Always confirm before saving a person.
+          pendingVisionRef.current = { kind: "person-consent", frame, name: det.label };
+          setVisionStatus("Confirm to save person");
+          speakMiraResponse(`I can remember known people only with permission. Should I save this person as ${det.label}?`);
+          return "done";
+        }
+
+        case "recognize_known_person": {
+          if (!knownPersonRecognition) {
+            speakMiraResponse("Known-person recognition is off. You can turn it on in Settings → Mira Vision.");
+            setVisionStatus("Camera ready");
+            return "done";
+          }
+          setVisionStatus("Recognizing");
+          setAvatarState("recognizing");
+          setVisionBusy(true);
+          try {
+            const memories = await listMemories();
+            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "person"));
+            pendingVisionContextRef.current = result.description;
+            if (result.peopleCount < 1) {
+              setAvatarState("idle");
+              speakMiraResponse("I don't see a person right now.");
+            } else {
+              const match = matchMemory(result, memories, "person");
+              if (match && match.confidence >= 0.6) {
+                setAvatarState("recognized");
+                speakMiraResponse(`That looks like ${match.memory.label}.`);
+              } else if (match) {
+                setAvatarState("uncertain");
+                speakMiraResponse(`This might be ${match.memory.label}, but I'm not fully sure.`);
+              } else {
+                setAvatarState("idle");
+                speakMiraResponse("I see a person, but I don't recognize them.");
+              }
+            }
+          } catch {
+            setAvatarState("idle");
+            speakMiraResponse("Sorry, I couldn't analyze that.");
+          } finally {
+            setVisionBusy(false);
+            setVisionStatus("Camera ready");
+          }
+          return "done";
+        }
+
+        case "forget_visual_memory": {
+          if (det.label) {
+            await handleForget(det.label);
+          } else {
+            speakMiraResponse("Which one should I forget? Say its name, like “forget my keyboard.”");
+          }
+          return "done";
+        }
+
+        default:
+          return "chat";
+      }
+    },
+    [camera, knownPersonRecognition, handleTeachObjectSave, handleTeachPersonSave, handleForget, speakMiraResponse],
+  );
+
   // ----- core flow: send a user turn to the AI -----
   // `speak` is true for the voice call and false for the text chat, which is
   // a quiet, text-only conversation over the same history.
@@ -160,17 +563,31 @@ export default function Page() {
       const nextMessages = [...messages, userMsg];
       setMessages(nextMessages);
       setInterimText("");
+
+      // Live Vision Conversation: when the camera is active and live vision +
+      // auto-capture are on, classify the turn and possibly handle it visually.
+      if (liveVisionEnabled && autoCaptureVision && cameraActiveRef.current) {
+        const outcome = await routeVisionTurn(trimmed);
+        if (outcome === "done") return; // Mira already responded by voice
+        // "chat" → fall through; a camera-view context may now be set.
+      }
+
       setAvatarState("thinking");
 
       // Cancel any in-flight request from a previous turn.
       abortRef.current?.abort();
       abortRef.current = new AbortController();
 
+      // Inject (and consume) any pending "what the camera saw" context.
+      const visionContext = pendingVisionContextRef.current || undefined;
+      pendingVisionContextRef.current = "";
+
       try {
         const response = await sendChat(
           {
             messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
             memory,
+            visionContext,
           },
           abortRef.current.signal,
         );
@@ -216,7 +633,7 @@ export default function Page() {
         setAvatarState("error");
       }
     },
-    [messages, memory, liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [messages, memory, liveAvatarEnabled, autoCaptureVision, liveVisionEnabled, ttsModel, geminiVoice, routeVisionTurn, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
   );
 
   // ----- mic actions -----
@@ -395,6 +812,18 @@ export default function Page() {
           <div className="flex items-center gap-1">
             <button
               type="button"
+              onClick={openCamera}
+              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
+              aria-label="Open camera (Mira Vision)"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+            </button>
+
+            <button
+              type="button"
               onClick={openChat}
               className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
               aria-label="Open chat"
@@ -504,6 +933,29 @@ export default function Page() {
           </div>
         </footer>
 
+        {/* Mira Vision camera (full-screen overlay) */}
+        {cameraOpen && (
+          <CameraPanel
+            videoRef={camera.videoRef}
+            status={camera.status}
+            error={camera.error}
+            assistantName={assistantDisplayName}
+            busy={visionBusy}
+            liveVision={liveVisionEnabled && autoCaptureVision}
+            visionStatus={visionStatus}
+            capture={camera.capture}
+            onLook={handleLook}
+            onTeachObjectSave={handleTeachObjectSave}
+            onTeachPersonSave={handleTeachPersonSave}
+            onClose={closeCamera}
+            avatarState={avatarState}
+            pushToTalk={pushToTalk}
+            interimText={interimText}
+            onMicPress={handleMicPress}
+            onMicRelease={handleMicRelease}
+          />
+        )}
+
         {/* WhatsApp-style text chat (full-screen overlay) */}
         {viewMode === "chat" && (
           <ChatView
@@ -541,6 +993,12 @@ export default function Page() {
           onTtsModelChange={setTtsModel}
           geminiVoice={geminiVoice}
           onGeminiVoiceChange={setGeminiVoice}
+          knownPersonRecognition={knownPersonRecognition}
+          onKnownPersonRecognitionChange={setKnownPersonRecognition}
+          liveVisionEnabled={liveVisionEnabled}
+          onLiveVisionChange={setLiveVisionEnabled}
+          autoCaptureVision={autoCaptureVision}
+          onAutoCaptureVisionChange={setAutoCaptureVision}
           onResetConversation={handleReset}
         />
       </main>
