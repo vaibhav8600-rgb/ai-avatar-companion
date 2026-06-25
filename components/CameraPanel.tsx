@@ -9,7 +9,7 @@
 import { useState, type RefObject } from "react";
 import MicButton from "@/components/MicButton";
 import type { AvatarState } from "@/types";
-import type { CameraStatus } from "@/lib/useCamera";
+import type { CameraStatus, CameraFacingMode } from "@/lib/useCamera";
 
 interface CameraPanelProps {
   videoRef: RefObject<HTMLVideoElement>;
@@ -30,6 +30,11 @@ interface CameraPanelProps {
   interimText: string;
   onMicPress: () => void;
   onMicRelease: () => void;
+  // Front/back camera switching
+  currentFacingMode: CameraFacingMode;
+  canSwitchCamera: boolean;
+  isSwitchingCamera: boolean;
+  onSwitchCamera: () => void;
 }
 
 type Phase = "preview" | "object" | "person";
@@ -52,6 +57,10 @@ export default function CameraPanel({
   interimText,
   onMicPress,
   onMicRelease,
+  currentFacingMode,
+  canSwitchCamera,
+  isSwitchingCamera,
+  onSwitchCamera,
 }: CameraPanelProps) {
   const [phase, setPhase] = useState<Phase>("preview");
 
@@ -146,6 +155,33 @@ export default function CameraPanel({
           <div className="absolute inset-0 grid place-items-center bg-ink-900/40">
             <div className="h-9 w-9 rounded-full border-2 border-white/20 border-t-signal-400 animate-spin" />
           </div>
+        )}
+
+        {/* Front/back switch — only when more than one camera exists */}
+        {active && canSwitchCamera && (
+          <button
+            type="button"
+            onClick={onSwitchCamera}
+            disabled={isSwitchingCamera}
+            aria-label={currentFacingMode === "user" ? "Use back camera" : "Use front camera"}
+            className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-ink-900/70 px-3 py-1.5 text-xs text-cream-100/90 backdrop-blur-sm hover:bg-ink-900/85 disabled:opacity-50"
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={isSwitchingCamera ? "animate-spin" : ""}
+            >
+              <path d="M23 4v6h-6M1 20v-6h6" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            {currentFacingMode === "user" ? "Back" : "Front"}
+          </button>
         )}
 
         {/* Interim transcript floats over the video while listening */}
