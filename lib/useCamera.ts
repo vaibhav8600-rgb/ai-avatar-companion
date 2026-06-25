@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadPreferredCamera, savePreferredCamera } from "./memoryManager";
+import { markPermissionGranted } from "./permissionManager";
 
 export type CameraStatus =
   | "idle" // not started
@@ -118,6 +119,7 @@ export function useCamera() {
       try {
         await openStream(facing, options?.deviceId);
         setStatus("active");
+        markPermissionGranted(); // keep the central manager in sync
         await refreshDevices(); // labels/devices available once permission granted
         return true;
       } catch (err) {

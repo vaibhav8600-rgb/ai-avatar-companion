@@ -8,6 +8,7 @@ import ChatTranscript from "@/components/ChatTranscript";
 import ChatView from "@/components/ChatView";
 import SettingsPanel from "@/components/SettingsPanel";
 import CameraPanel from "@/components/CameraPanel";
+import PermissionSetup from "@/components/PermissionSetup";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { sendChat } from "@/lib/apiClient";
 import { useCamera, type CameraFacingMode } from "@/lib/useCamera";
@@ -24,6 +25,12 @@ import {
   deleteMemory as deleteVisualMemory,
 } from "@/lib/visualMemory";
 import { detectVisionIntent } from "@/lib/visionIntentRouter";
+import {
+  isPermissionsInitialized,
+  setPermissionsInitialized,
+  queryPermissionState,
+  resetPermissions,
+} from "@/lib/permissionManager";
 import {
   createRecognizer,
   isSpeechRecognitionSupported,
@@ -112,6 +119,8 @@ export default function Page() {
     | { kind: "person-consent"; frame: string; name: string }
   >(null);
   const camera = useCamera();
+  // Centralized permission onboarding.
+  const [permissionSetupOpen, setPermissionSetupOpen] = useState(false);
   // Live, closure-safe view of whether the camera is actually streaming.
   const cameraActiveRef = useRef(false);
   useEffect(() => {
@@ -171,6 +180,25 @@ export default function Page() {
   useEffect(() => {
     saveKnownPersonRecognition(knownPersonRecognition);
   }, [knownPersonRecognition]);
+
+  // First-run permission onboarding: show the setup card unless we've already
+  // initialized, or the browser already reports camera+mic as granted.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (isPermissionsInitialized()) return;
+      const state = await queryPermissionState();
+      if (cancelled) return;
+      if (state === "granted") {
+        setPermissionsInitialized(true); // already allowed — no need to onboard
+        return;
+      }
+      setPermissionSetupOpen(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     saveLiveVision(liveVisionEnabled);
@@ -958,6 +986,16 @@ export default function Page() {
           </div>
         </footer>
 
+        {/* First-run camera + mic permission onboarding */}
+        <PermissionSetup
+          open={permissionSetupOpen}
+          onGranted={() => {
+            setPermissionsInitialized(true);
+            setPermissionSetupOpen(false);
+          }}
+          onDismiss={() => setPermissionSetupOpen(false)}
+        />
+
         {/* Mira Vision camera (full-screen overlay) */}
         {cameraOpen && (
           <CameraPanel
@@ -1028,6 +1066,11 @@ export default function Page() {
           onLiveVisionChange={setLiveVisionEnabled}
           autoCaptureVision={autoCaptureVision}
           onAutoCaptureVisionChange={setAutoCaptureVision}
+          onResetPermissions={() => {
+            resetPermissions();
+            setSettingsOpen(false);
+            setPermissionSetupOpen(true);
+          }}
           onResetConversation={handleReset}
         />
       </main>

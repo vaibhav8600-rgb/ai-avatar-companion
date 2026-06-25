@@ -36,6 +36,8 @@ interface SettingsPanelProps {
   /** Auto-capture a frame for vision questions. */
   autoCaptureVision: boolean;
   onAutoCaptureVisionChange: (v: boolean) => void;
+  /** Re-run the camera/mic permission onboarding. */
+  onResetPermissions: () => void;
   onResetConversation: () => void;
 }
 
@@ -63,6 +65,7 @@ export default function SettingsPanel({
   onLiveVisionChange,
   autoCaptureVision,
   onAutoCaptureVisionChange,
+  onResetPermissions,
   onResetConversation,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -262,10 +265,18 @@ export default function SettingsPanel({
             >
               Manage visual memories…
             </button>
+            <button
+              type="button"
+              onClick={onResetPermissions}
+              className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-cream-100 text-sm hover:bg-white/[0.06] text-left"
+            >
+              Re-run permission setup…
+            </button>
             <p className="text-[10px] leading-relaxed text-cream-100/40">
               Mira can see through your camera only when you open it. Images stay
               on this device; nothing is sent unless you capture a frame. She
               never identifies strangers — known-person recognition is opt-in.
+              Final camera/mic control always stays with your browser/OS.
             </p>
           </div>
 

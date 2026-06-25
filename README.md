@@ -190,6 +190,7 @@ ai-avatar-companion/
 │   ├── SettingsPanel.tsx          # Name, volume, voice, avatar mode, mic mode, vision, reset
 │   ├── CameraPanel.tsx            # Mira Vision camera UI (Look / Teach / Close)
 │   ├── VisionMemoryPanel.tsx      # Manage learned objects/people (Settings)
+│   ├── PermissionSetup.tsx        # First-run camera+mic permission onboarding
 │   ├── ServiceWorkerRegistrar.tsx # Registers the PWA service worker (prod only)
 │   └── ErrorBoundary.tsx
 ├── lib/
@@ -201,6 +202,7 @@ ai-avatar-companion/
 │   ├── useCamera.ts               # getUserMedia camera hook + frame capture
 │   ├── visionClient.ts            # Vision analyze fetch + thumbnail + matching
 │   ├── visionIntentRouter.ts      # Classifies a turn into a vision intent
+│   ├── permissionManager.ts       # Centralized camera+mic permission flow
 │   ├── visualMemory.ts            # IndexedDB visual-memory store (CRUD + export/import)
 │   └── memoryManager.ts           # localStorage persistence
 ├── scripts/
@@ -329,6 +331,32 @@ matching.
 - Frames are sent to your configured vision provider (Google/OpenAI) only when
   you capture; API keys stay server-side and raw provider errors are never
   exposed to the browser.
+
+---
+
+## Permissions on mobile / PWA
+
+Mira uses one **centralized permission setup**: on first run a card asks to
+enable camera + microphone *together* (one `getUserMedia({ audio, video })`),
+then immediately stops the tracks so nothing stays active. The grant is shared
+by every feature (voice + Mira Vision), so you're asked once rather than per
+module. The app remembers it was initialized (localStorage) and won't show the
+card again once granted.
+
+> Mira **cannot** bypass the browser/OS prompt — final control always stays with
+> your browser. The manager only unifies *when* you're asked.
+
+If the browser keeps re-prompting on mobile:
+
+- Use the **same URL/domain** each time, or install the **PWA** (same HTTPS
+  origin) — different origins have separate permissions.
+- **Avoid private/incognito** mode; it forgets permissions on close.
+- **iPhone Safari:** Settings → (this website) → Camera & Microphone → **Allow**.
+- **Android Chrome:** Site settings → Camera/Microphone → **Allow**.
+
+You can re-run the setup anytime via **Settings → Mira Vision → Re-run
+permission setup**. Camera and mic are never auto-started, and a visible
+indicator shows whenever they're actually active.
 
 ---
 
