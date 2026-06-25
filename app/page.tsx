@@ -210,8 +210,18 @@ export default function Page() {
   }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
 
   // ----- Mira Vision: speak + respond helpers -----
+  // Immediately silence any current speech (browser + Simli buffer).
+  const interruptSpeech = useCallback(() => {
+    stopSpeaking();
+    liveAvatar.clear();
+  }, [liveAvatar.clear]);
+
+  // THE single voice pipeline used by every reply (chat + all vision flows +
+  // errors): interrupt any current speech, then speak via Simli (if live) or
+  // the browser, returning to idle when done.
   const voiceReply = useCallback(
     async (text: string) => {
+      interruptSpeech();
       const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
       if (live) {
         setAvatarState("speaking");
@@ -225,7 +235,7 @@ export default function Page() {
         speakWithBrowser(text);
       }
     },
-    [liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
   );
 
   /** Add an assistant message and speak it. */
@@ -362,6 +372,10 @@ export default function Page() {
   // normal /api/chat turn (optionally with a freshly-set camera context).
   const routeVisionTurn = useCallback(
     async (transcript: string): Promise<"done" | "chat"> => {
+      // Stop any in-progress speech first so she doesn't talk over herself
+      // while the frame is captured and analyzed.
+      interruptSpeech();
+
       // 1) Resolve a pending follow-up (label / name / consent) first.
       const pending = pendingVisionRef.current;
       if (pending) {
@@ -542,7 +556,7 @@ export default function Page() {
           return "chat";
       }
     },
-    [camera, knownPersonRecognition, handleTeachObjectSave, handleTeachPersonSave, handleForget, speakMiraResponse],
+    [camera, knownPersonRecognition, handleTeachObjectSave, handleTeachPersonSave, handleForget, speakMiraResponse, interruptSpeech],
   );
 
   // ----- core flow: send a user turn to the AI -----
@@ -607,25 +621,8 @@ export default function Page() {
           return;
         }
 
-        // Voice fallback chain:
-        //   1. Live avatar (Gemini TTS model chain, server-side) — lip-synced.
-        //   2. If every TTS model fails (or live isn't available), the browser's
-        //      Web Speech API speaks the reply as a last resort.
-        const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
-        if (live) {
-          setAvatarState("speaking");
-          try {
-            await liveAvatar.speak(reply, ttsModel, geminiVoice);
-            // The avatar's "silent" event returns us to idle when it finishes.
-          } catch (speakErr) {
-            console.warn("Live avatar TTS failed — falling back to Web Speech:", speakErr);
-            // Drop any half-sent Simli buffer, then speak via the browser.
-            liveAvatar.clear();
-            speakWithBrowser(reply);
-          }
-        } else {
-          speakWithBrowser(reply);
-        }
+        // Speak through the single shared pipeline (Simli → browser fallback).
+        await voiceReply(reply);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         const msg = err instanceof Error ? err.message : "Connection failed";
@@ -633,7 +630,7 @@ export default function Page() {
         setAvatarState("error");
       }
     },
-    [messages, memory, liveAvatarEnabled, autoCaptureVision, liveVisionEnabled, ttsModel, geminiVoice, routeVisionTurn, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [messages, memory, autoCaptureVision, liveVisionEnabled, routeVisionTurn, voiceReply],
   );
 
   // ----- mic actions -----
