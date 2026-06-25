@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeToSimliPcm } from "./audio";
+import { fetchTtsAudio } from "./ttsAudio";
 
 // Minimal shape of the bits of SimliClient we use (avoids importing the type
 // at module scope, which would pull the browser-only module into SSR).
@@ -130,26 +131,13 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     return connectPromiseRef.current;
   }, [doConnect, status]);
 
-  /** Synthesize `text` and stream it to the avatar for lip-sync. */
+  /** Synthesize `text` (Deepgram → Gemini fallback) and stream it for lip-sync. */
   const speak = useCallback(
     async (text: string, model?: string, voice?: string): Promise<void> => {
       const client = clientRef.current;
       if (!client) throw new Error("Avatar not connected");
 
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, model, voice }),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error((detail as { error?: string }).error || `TTS failed (${res.status})`);
-      }
-
-      const { audioBase64, sampleRate } = (await res.json()) as {
-        audioBase64: string;
-        sampleRate: number;
-      };
+      const { audioBase64, sampleRate } = await fetchTtsAudio(text, model, voice);
       const pcm = await decodeToSimliPcm(audioBase64, sampleRate || 24000, 16000);
 
       for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
