@@ -20,6 +20,9 @@ re-architecting the core.
 
 Built by **Vaibhav Rajput**.
 
+> 🏗️ New here? See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the
+> architecture, flow, and sequence diagrams.
+
 ---
 
 ## Quick start
