@@ -137,6 +137,9 @@ export default function Page() {
   // to the static image + browser speech when Simli isn't configured.
   const liveAvatar = useSimliAvatar({
     onSpeaking: () => setAvatarState("speaking"),
+    // Only a real end-of-speech returns us to idle. We must NOT reset from
+    // "thinking" here: clear()/barge-in emits an async "silent" that can land
+    // during the next turn's "thinking" and would otherwise flicker the label.
     onSilent: () => setAvatarState((s) => (s === "speaking" ? "idle" : s)),
     onError: (m) => console.warn("Live avatar:", m),
   });
@@ -262,7 +265,8 @@ export default function Page() {
       interruptSpeech();
       const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
       if (live) {
-        setAvatarState("speaking");
+        // Stay in "thinking" through TTS generation/buffering — Simli emits its
+        // own "speaking" event when audio actually starts (wired in the hook).
         try {
           await liveAvatar.speak(text, ttsModel, geminiVoice);
         } catch {
@@ -272,11 +276,17 @@ export default function Page() {
         return;
       }
 
-      // Still mode: use the same Gemini TTS model chain, played in-browser.
+      // Still mode: keep "thinking" while the TTS is fetched; flip to "speaking"
+      // only when audio actually begins (onPlay).
       if (isTtsAudioSupported()) {
-        setAvatarState("speaking");
         try {
-          await playServerTts({ text, model: ttsModel, voice: geminiVoice, volume });
+          await playServerTts({
+            text,
+            model: ttsModel,
+            voice: geminiVoice,
+            volume,
+            onPlay: () => setAvatarState("speaking"),
+          });
           // Only settle to idle if we're still the speaking turn (a new mic
           // press / vision command may have moved us on).
           setAvatarState((s) => (s === "speaking" ? "idle" : s));
@@ -704,26 +714,31 @@ export default function Page() {
     interruptSpeech();
 
     wasManualStopRef.current = false;
-    const recognizer = createRecognizer({
-      onPartial: (t) => setInterimText(t),
-      onFinal: (t) => {
-        setInterimText("");
-        // Push to send. The onend handler will then move out of listening.
-        void sendUserMessage(t);
+    const recognizer = createRecognizer(
+      {
+        onPartial: (t) => setInterimText(t),
+        onFinal: (t) => {
+          setInterimText("");
+          // Push to send. The onend handler will then move out of listening.
+          void sendUserMessage(t);
+        },
+        onError: (msg) => {
+          if (msg.toLowerCase().includes("not-allowed") || msg.toLowerCase().includes("denied")) {
+            setErrorMessage("Microphone permission was denied. You can still type below.");
+          } else {
+            setErrorMessage(msg);
+          }
+          setAvatarState("error");
+        },
+        onEnd: () => {
+          // If still in listening (no final text triggered a state change), return to idle.
+          setAvatarState((s) => (s === "listening" ? "idle" : s));
+        },
       },
-      onError: (msg) => {
-        if (msg.toLowerCase().includes("not-allowed") || msg.toLowerCase().includes("denied")) {
-          setErrorMessage("Microphone permission was denied. You can still type below.");
-        } else {
-          setErrorMessage(msg);
-        }
-        setAvatarState("error");
-      },
-      onEnd: () => {
-        // If still in listening (no final text triggered a state change), return to idle.
-        setAvatarState((s) => (s === "listening" ? "idle" : s));
-      },
-    });
+      // Click-to-talk: finalize after a ~1.6s pause so mid-sentence pauses don't
+      // cut you off. Push-to-talk: the button release ends the turn (no timer).
+      { silenceMs: pushToTalk ? 0 : 1600 },
+    );
 
     if (!recognizer) {
       setErrorMessage("Speech recognition not available.");
@@ -737,7 +752,7 @@ export default function Page() {
     } catch {
       // start() throws if already started; ignore.
     }
-  }, [sendUserMessage, interruptSpeech]);
+  }, [sendUserMessage, interruptSpeech, pushToTalk]);
 
   const stopListening = useCallback(() => {
     wasManualStopRef.current = true;

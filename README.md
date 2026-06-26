@@ -80,7 +80,7 @@ microphone permission, and speak.
 
 ```
                          ┌──────────────────────────────────────────────┐
-                         │            Next.js server routes              │
+                         │            Next.js server routes             │
                          │             (API keys live here)             │
    ┌──────────────┐      │                                              │
    │   Browser    │ ───▶ │  POST /api/chat        → Anthropic / OpenAI  │

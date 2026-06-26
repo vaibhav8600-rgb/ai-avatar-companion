@@ -102,6 +102,8 @@ interface PlayOptions {
   voice?: string;
   /** 0..1 */
   volume?: number;
+  /** Called the moment audio actually starts playing (not while fetching). */
+  onPlay?: () => void;
 }
 
 /**
@@ -139,5 +141,6 @@ export async function playServerTts(opts: PlayOptions): Promise<void> {
     };
     currentSource = source;
     source.start();
+    opts.onPlay?.(); // audio is now playing
   });
 }
