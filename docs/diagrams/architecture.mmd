@@ -1,0 +1,69 @@
+%% Mira — System Architecture (container diagram)
+%% Render: https://mermaid.live  or  mmdc -i architecture.mmd -o architecture.svg
+flowchart TB
+  subgraph CLIENT["Browser (client)"]
+    direction TB
+    ORCH["app/page.tsx<br/>Conversation Orchestrator"]
+    subgraph IN["Input"]
+      STT["Web Speech API (STT)"]
+      HF["Hands-free / auto-restart"]
+      BARGE["Barge-in"]
+    end
+    subgraph OUT["Output"]
+      STAGE["AvatarStage<br/>live video / still image"]
+      WEBAUDIO["Web Audio PCM playback"]
+      SYNTH["SpeechSynthesis (fallback voice)"]
+      CAP["Captions"]
+    end
+    subgraph VIS["Vision"]
+      CAM["useCamera + frame capture"]
+      ROUTER["visionIntentRouter"]
+    end
+    subgraph STORE_C["Persistence"]
+      LS["localStorage<br/>memory / history / settings"]
+      IDB["IndexedDB<br/>visual memory"]
+    end
+  end
+
+  subgraph SERVER["Next.js API routes — runtime: nodejs"]
+    GUARD["lib/apiGuard.ts<br/>same-origin / x-api-secret + rate limit"]
+    CHAT["POST /api/chat"]
+    TTSD["POST /api/tts/deepgram"]
+    TTSG["POST /api/tts"]
+    VISION["POST /api/vision/analyze"]
+    SIMLISESS["POST /api/simli-session"]
+  end
+
+  subgraph EXT["External services"]
+    AI["AI providers<br/>Anthropic / OpenAI / Gemini"]
+    DG["Deepgram Aura (TTS)"]
+    GTTS["Gemini TTS (model chain)"]
+    VPROV["Gemini / OpenAI Vision"]
+    SIMLI["Simli<br/>WebRTC lip-synced avatar"]
+  end
+
+  subgraph STORE_S["Rate-limit store"]
+    REDIS["Upstash Redis (prod)"]
+    MEM["in-memory Map (dev / fallback)"]
+  end
+
+  ORCH -->|"fetch() same-origin"| GUARD
+  GUARD --> CHAT & TTSD & TTSG & VISION & SIMLISESS
+  CHAT -->|"prompt + recent history"| AI
+  TTSD -->|"reply text"| DG
+  TTSG -->|"reply text"| GTTS
+  VISION -->|"frame + thumbnails"| VPROV
+  SIMLISESS -->|"mint token"| SIMLI
+  ORCH <-->|"WebRTC: 16kHz PCM out / video in"| SIMLI
+  GUARD <-->|"sliding-window state"| REDIS
+  GUARD -.->|"fallback"| MEM
+
+  classDef client fill:#e7f0ff,stroke:#5b8def,color:#13243a;
+  classDef server fill:#e3f7f4,stroke:#3aa99a,color:#0f2e2a;
+  classDef ext fill:#fdf0db,stroke:#d6a44c,color:#3a2c10;
+  classDef store fill:#eef0f2,stroke:#9aa3ad,color:#23292f;
+
+  class ORCH,STT,HF,BARGE,STAGE,WEBAUDIO,SYNTH,CAP,CAM,ROUTER,LS,IDB client;
+  class GUARD,CHAT,TTSD,TTSG,VISION,SIMLISESS server;
+  class AI,DG,GTTS,VPROV,SIMLI ext;
+  class REDIS,MEM store;
