@@ -111,6 +111,10 @@ export function createRecognizer(
   };
 
   recognition.onresult = (event: SpeechRecognitionEvent) => {
+    // Once we've submitted this turn, ignore any trailing result events. Mobile
+    // engines often emit a final result *after* stop(), which would otherwise
+    // re-populate the interim transcript with the old text we just cleared.
+    if (finalized) return;
     // Rebuild the whole transcript each time (continuous results accumulate),
     // so onFinal gets the complete sentence, not just the last segment.
     let finalT = "";

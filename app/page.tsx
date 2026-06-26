@@ -821,6 +821,10 @@ export default function Page() {
     // Stop any currently-playing audio so she doesn't talk over the user.
     interruptSpeech();
 
+    // Clear any leftover transcript from the previous turn so the old text
+    // doesn't linger on screen until the user speaks again.
+    setInterimText("");
+
     wasManualStopRef.current = false;
     const recognizer = createRecognizer(
       {
