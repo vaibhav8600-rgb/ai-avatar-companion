@@ -53,35 +53,80 @@ export function isSpeechRecognitionSupported(): boolean {
   return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
 
+export interface RecognizerOptions {
+  lang?: string;
+  /**
+   * Auto-finalize after this much trailing silence (ms). Used for click-to-talk
+   * so natural mid-sentence pauses don't cut you off. Set to 0 for push-to-talk,
+   * where the user's button release is what ends the turn.
+   */
+  silenceMs?: number;
+}
+
 export function createRecognizer(
   handlers: RecognitionHandlers,
-  lang: string = "en-US",
+  options: RecognizerOptions = {},
 ): SpeechRecognitionLike | null {
   if (!isSpeechRecognitionSupported()) return null;
 
+  const { lang = "en-US", silenceMs = 0 } = options;
   const Ctor = (window.SpeechRecognition || window.webkitSpeechRecognition)!;
   const recognition = new Ctor();
-  recognition.continuous = false;
+  // continuous = true so the engine keeps listening across natural pauses
+  // instead of finalizing (and stopping) on the first one.
+  recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = lang;
 
+  let latest = ""; // full transcript so far (final + interim)
+  let finalized = false;
+  let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearSilence = () => {
+    if (silenceTimer) {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+    }
+  };
+
+  // Send the accumulated transcript exactly once and stop listening.
+  const submit = () => {
+    if (finalized) return;
+    const text = latest.trim();
+    if (!text) return;
+    finalized = true;
+    clearSilence();
+    handlers.onFinal(text);
+    try {
+      recognition.stop();
+    } catch {
+      // already stopped
+    }
+  };
+
   recognition.onresult = (event: SpeechRecognitionEvent) => {
-    let interim = "";
-    let final = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    // Rebuild the whole transcript each time (continuous results accumulate),
+    // so onFinal gets the complete sentence, not just the last segment.
+    let finalT = "";
+    let interimT = "";
+    for (let i = 0; i < event.results.length; i++) {
       const result = event.results[i];
       const transcript = result[0].transcript;
-      if (result.isFinal) {
-        final += transcript;
-      } else {
-        interim += transcript;
-      }
+      if (result.isFinal) finalT += transcript;
+      else interimT += transcript;
     }
-    if (interim && handlers.onPartial) handlers.onPartial(interim.trim());
-    if (final) handlers.onFinal(final.trim());
+    latest = `${finalT}${interimT}`.trim();
+    if (latest && handlers.onPartial) handlers.onPartial(latest);
+
+    // Restart the "they've stopped talking" timer on every word.
+    if (silenceMs > 0) {
+      clearSilence();
+      silenceTimer = setTimeout(submit, silenceMs);
+    }
   };
 
   recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
+    clearSilence();
     // Common non-fatal errors we silence; surface the rest.
     if (e.error === "no-speech" || e.error === "aborted") {
       handlers.onEnd?.();
@@ -90,7 +135,13 @@ export function createRecognizer(
     handlers.onError?.(e.message || e.error || "Microphone error");
   };
 
-  recognition.onend = () => handlers.onEnd?.();
+  recognition.onend = () => {
+    clearSilence();
+    // If the engine ended (manual stop / push-to-talk release / its own silence
+    // cutoff) and we have unsent text, send it now.
+    if (!finalized && latest.trim()) submit();
+    handlers.onEnd?.();
+  };
 
   return recognition;
 }
