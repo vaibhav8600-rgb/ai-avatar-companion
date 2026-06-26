@@ -255,7 +255,7 @@ async function synthesizeViaLive(
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // Higher limit than chat: sentence-chunked replies make several TTS calls.
-  const blocked = guard(req, "tts", { limit: 90, windowMs: 60_000 });
+  const blocked = await guard(req, "tts", { limit: 90, windowMs: 60_000 });
   if (blocked) return blocked;
 
   const apiKey = process.env.GOOGLE_API_KEY;

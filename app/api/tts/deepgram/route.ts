@@ -19,7 +19,7 @@ interface DeepgramBody {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const blocked = guard(req, "tts-deepgram", { limit: 90, windowMs: 60_000 });
+  const blocked = await guard(req, "tts-deepgram", { limit: 90, windowMs: 60_000 });
   if (blocked) return blocked;
 
   const apiKey = process.env.DEEPGRAM_API_KEY;
