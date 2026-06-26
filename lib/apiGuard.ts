@@ -30,6 +30,13 @@ interface GuardOptions {
   limit: number;
   /** Sliding window length in milliseconds. */
   windowMs: number;
+  /**
+   * Skip the distributed (Redis) limiter and use only the in-instance one.
+   * Use on latency-critical hot paths (e.g. TTS chunks, several per reply) where
+   * the expensive call (chat) is already Redis-gated — avoids a Redis round-trip
+   * per audio chunk.
+   */
+  localOnly?: boolean;
 }
 
 // ----- client IP -----
@@ -153,7 +160,7 @@ export async function guard(
 
   const ip = clientIp(req);
 
-  if (upstashConfigured) {
+  if (upstashConfigured && !opts.localOnly) {
     try {
       const { success, reset } = await getLimiter(route, opts).limit(ip);
       if (!success) {

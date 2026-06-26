@@ -44,12 +44,14 @@ import {
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
 import {
+  streamServerTts,
   playServerTtsChunks,
   stopServerTts,
   primeTtsAudio,
   isTtsAudioSupported,
 } from "@/lib/ttsAudio";
 import { splitIntoSpeechChunks } from "@/lib/textChunks";
+import { perfStart, perfMark, perfFlush } from "@/lib/perf";
 import {
   loadMemory,
   saveMemory,
@@ -76,6 +78,17 @@ import {
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
 
 const ASSISTANT_NAME = "Mira"; // mirrors ASSISTANT_NAME default; UI label only
+
+// Trailing silence before a click-to-talk turn auto-finalizes (ms). Lower =
+// snappier turns, but too low risks cutting the user off mid-sentence. Tune
+// against the latency logs from lib/perf.ts. (Was 1600 — the largest fixed
+// per-turn delay; see docs/ARCHITECTURE.md latency notes.)
+const LISTEN_SILENCE_MS = 900;
+
+// Stream TTS (Deepgram) and play as audio arrives — first word starts in ~1s
+// instead of waiting for the whole clip. Flip to false to fall back to the
+// buffered chunk player if streaming ever misbehaves.
+const USE_TTS_STREAMING = true;
 
 // Labels are stored as the user said them ("my office laptop"); when Mira
 // speaks she says "your office laptop" rather than "your my office laptop".
@@ -171,6 +184,8 @@ export default function Page() {
     onSpeaking: () => {
       spokeRef.current = true; // watchdog: she actually started talking
       setAvatarState("speaking");
+      perfMark("first-audio");
+      perfFlush();
     },
     // Only a real end-of-speech returns us to idle. We must NOT reset from
     // "thinking" here: clear()/barge-in emits an async "silent" that can land
@@ -193,6 +208,8 @@ export default function Page() {
         return;
       }
       setAvatarState("speaking");
+      perfMark("first-audio");
+      perfFlush();
       speak({
         text,
         voiceName,
@@ -340,24 +357,41 @@ export default function Page() {
       interruptSpeech();
       // Caption the reply (shown when captions are enabled).
       setCaption(text);
-      // Sentence chunks so playback can start after the first sentence.
+      // Sentence chunks for the buffered (Gemini) fallback only; the streaming
+      // path sends the full text and plays it as it arrives.
       const chunks = splitIntoSpeechChunks(text);
 
       const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
       if (live) {
-        // Stay in "thinking" through TTS generation/buffering — Simli emits its
-        // own "speaking" event when audio actually starts (wired in the hook).
+        // Stay in "thinking" through TTS — Simli emits its own "speaking" event
+        // when audio actually starts (wired in the hook).
         spokeRef.current = false;
-        try {
-          await liveAvatar.speakChunks(chunks, ttsModel, geminiVoice);
-        } catch {
+        let ok = false;
+        // Tier 1: stream Deepgram straight into Simli (fastest).
+        if (USE_TTS_STREAMING) {
+          try {
+            await liveAvatar.speakStream(text);
+            ok = true;
+          } catch {
+            // fall through to buffered Gemini
+          }
+        }
+        // Tier 2: buffered Gemini chunks.
+        if (!ok) {
+          try {
+            await liveAvatar.speakChunks(chunks, ttsModel, geminiVoice);
+            ok = true;
+          } catch {
+            // fall through to browser
+          }
+        }
+        if (!ok) {
           liveAvatar.clear();
           speakWithBrowser(text);
           return;
         }
-        // Watchdog: if Simli accepted the audio but never signaled "speaking"
-        // (lost event / stalled stream), don't leave the UI stuck on Thinking —
-        // recover to the browser voice so she still responds.
+        // Watchdog: if Simli accepted audio but never signaled "speaking"
+        // (lost event / stalled stream), don't leave the UI stuck on Thinking.
         setTimeout(() => {
           if (!spokeRef.current && avatarStateRef.current === "thinking") {
             liveAvatar.clear();
@@ -367,28 +401,42 @@ export default function Page() {
         return;
       }
 
-      // Still mode: keep "thinking" while the first chunk is fetched; flip to
-      // "speaking" only when audio actually begins (onFirstPlay).
+      // Still mode: keep "thinking" until audio actually begins (onFirstPlay).
       if (isTtsAudioSupported()) {
-        try {
-          await playServerTtsChunks({
-            chunks,
-            model: ttsModel,
-            voice: geminiVoice,
-            volume,
-            onFirstPlay: () => setAvatarState("speaking"),
-          });
+        const onFirstPlay = () => {
+          setAvatarState("speaking");
+          perfMark("first-audio");
+          perfFlush();
+        };
+        let ok = false;
+        // Tier 1: streaming Deepgram.
+        if (USE_TTS_STREAMING) {
+          try {
+            await streamServerTts({ text, volume, onFirstPlay });
+            ok = true;
+          } catch {
+            // fall through to buffered Gemini
+          }
+        }
+        // Tier 2: buffered Gemini chunks.
+        if (!ok) {
+          try {
+            await playServerTtsChunks({ chunks, model: ttsModel, voice: geminiVoice, volume, onFirstPlay });
+            ok = true;
+          } catch {
+            // fall through to browser
+          }
+        }
+        if (ok) {
           // Only settle to idle if we're still the speaking turn (a new mic
           // press / vision command may have moved us on).
           setAvatarState((s) => (s === "speaking" ? "idle" : s));
           return;
-        } catch {
-          // Every TTS model failed — fall back to the browser voice.
         }
       }
       speakWithBrowser(text);
     },
-    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speakChunks, liveAvatar.clear, speakWithBrowser],
+    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speakStream, liveAvatar.speakChunks, liveAvatar.clear, speakWithBrowser],
   );
 
   /** Add an assistant message and speak it. */
@@ -776,6 +824,7 @@ export default function Page() {
           },
           abortRef.current.signal,
         );
+        perfMark("chat"); // reply received from /api/chat
 
         const reply = response.reply;
         const assistantMsg: ChatMessage = {
@@ -835,6 +884,7 @@ export default function Page() {
         onFinal: (t) => {
           setInterimText("");
           autoRestartCountRef.current = 0;
+          perfStart(); // begin latency turn at speech-finalize
           // Push to send. The onend handler will then move out of listening.
           void sendUserMessage(t);
         },
@@ -869,9 +919,9 @@ export default function Page() {
           setAvatarState((s) => (s === "listening" ? "idle" : s));
         },
       },
-      // Click-to-talk: finalize after a ~1.6s pause so mid-sentence pauses don't
+      // Click-to-talk: finalize after a short pause so mid-sentence pauses don't
       // cut you off. Push-to-talk: the button release ends the turn (no timer).
-      { silenceMs: pushToTalk ? 0 : 1600 },
+      { silenceMs: pushToTalk ? 0 : LISTEN_SILENCE_MS },
     );
 
     if (!recognizer) {

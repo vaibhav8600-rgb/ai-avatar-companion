@@ -70,7 +70,7 @@ microphone permission, and speak.
 | Avatar | Toggle live video ↔ still image in Settings | ✅ |
 | Avatar | State-driven aura (idle / listening / thinking / speaking / error) | ✅ |
 | Avatar | Watchdog recovery — never gets stuck on "Thinking" if the stream stalls | ✅ |
-| Voice | **Sentence-chunked TTS** — starts speaking after the first part of long replies | ✅ |
+| Voice | **Streaming TTS** — audio plays as it's synthesized; first word in ~1s | ✅ |
 | UX | Barge-in: start talking and she stops mid-sentence | ✅ |
 | UX | **Captions** — show her spoken reply as on-screen text (accessibility) | ✅ |
 | UX | Offline banner + one-tap **Retry** on a failed turn | ✅ |
@@ -112,16 +112,12 @@ a same-origin / shared-secret check, then a per-IP sliding-window rate limit
 You speak ─▶ Web Speech STT ─▶ [Live Vision? classify intent] ─▶ POST /api/chat
                                                                        │ reply text
                                                                        ▼
-                                      split into sentence chunks (lib/textChunks)
-                                                                       │
-                         ┌─────────────────────────────────────────────┘
-                         ▼  per chunk, prefetch next while current plays
-              TTS chain:  Deepgram ─▶ Gemini TTS ─▶ browser SpeechSynthesis
-                         │ PCM                         │ (last-resort voice)
+              TTS chain:  Deepgram (streamed) ─▶ Gemini (buffered) ─▶ browser
+                         │ 16kHz PCM, played as it arrives    │ (last-resort voice)
               ┌──────────┴───────────┐
               ▼ live mode            ▼ still mode
-   resample 16kHz → Simli      Web Audio plays PCM
-   (lip-synced video)          (over still image)
+   PCM stream → Simli          Web Audio plays the
+   (lip-synced video)          PCM stream (still image)
 ```
 
 1. **You speak** → transcribed locally by the Web Speech API. Mid-sentence
@@ -132,13 +128,13 @@ You speak ─▶ Web Speech STT ─▶ [Live Vision? classify intent] ─▶ POS
    or attach "what the camera sees" context to the chat call.
 3. The transcript (recent-turn window + memory + system prompt) goes to
    **`/api/chat`**, which calls the configured provider and returns the reply.
-4. The reply is split into **sentence chunks**; each chunk's audio is fetched
-   through the TTS chain (**Deepgram → Gemini → browser**) while the previous
-   chunk plays, so she starts talking after the first sentence.
-5. **Live mode:** PCM is resampled to 16 kHz and streamed to **Simli**, which
-   lip-syncs a photoreal face. **Still mode:** the PCM is played via Web Audio
-   over the still image. A **watchdog** recovers to the browser voice if the live
-   stream accepts audio but never starts speaking.
+4. The reply is voiced by the **streaming TTS chain** (**Deepgram streamed →
+   Gemini buffered → browser**) and played as the audio arrives, so she starts
+   talking within ~a second instead of waiting for the whole clip.
+5. **Live mode:** the 16 kHz PCM stream feeds **Simli**, which lip-syncs a
+   photoreal face. **Still mode:** Web Audio plays the PCM stream over the still
+   image. A **watchdog** recovers to the browser voice if the live stream accepts
+   audio but never starts speaking.
 6. **Barge-in:** start talking (or tap the mic) and any in-progress speech stops
    immediately.
 
@@ -218,20 +214,22 @@ Both **Live** and **Still image** modes speak through the same 3-tier fallback
 chain (live mode lip-syncs the audio on Simli; still mode plays it via Web
 Audio):
 
-1. **Deepgram Aura** (`/api/tts/deepgram`) — primary, when `DEEPGRAM_API_KEY` is
-   set. Returns raw PCM.
-2. **Gemini TTS** (`/api/tts`) — the Gemini model chain, if Deepgram fails / has
-   no key. Also raw PCM.
+1. **Deepgram Aura** (`/api/tts/deepgram`) — primary, **streamed**: 16 kHz PCM is
+   played as it's synthesized, so the first word starts almost immediately
+   instead of after the whole clip.
+2. **Gemini TTS** (`/api/tts`) — buffered fallback if Deepgram streaming fails /
+   has no key. Returns a full PCM clip, played in prefetched sentence chunks.
 3. **Browser Web Speech** (`speakWithBrowser`) — if both server tiers fail.
 
 Deepgram's voice is set with `DEEPGRAM_TTS_MODEL` (default `aura-2-luna-en`);
 the "Avatar voice model" / "Avatar voice" pickers in Settings apply to the
 Gemini tier.
 
-**Sentence-chunked playback:** long replies are split into sentence chunks and
-the next chunk's audio is prefetched while the current one plays, so she starts
-talking after the first part instead of waiting for the whole reply to
-synthesize. Short/medium replies stay a single request (no added overhead).
+**Why streaming:** TTS latency was dominated by waiting for the entire clip
+before playback, so it scaled with reply length (a long reply meant 6–8 s before
+the first word). Streaming pins first-audio to the connection floor (~1 s)
+regardless of length. Flip `USE_TTS_STREAMING` in `app/page.tsx` to fall back to
+the buffered chunk player if needed.
 
 > **Cost note:** Gemini TTS bills per character and Simli bills per minute of
 > streaming, so each spoken reply costs a little in **both** modes now. If you

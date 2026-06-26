@@ -103,6 +103,8 @@ flowchart TB
 
 ![Conversation flow](diagrams/flow.png)
 
+> _Note: this PNG predates the streaming-TTS update — the Mermaid source below is current. Re-export to refresh._
+
 <details>
 <summary>Mermaid source</summary>
 
@@ -123,10 +125,10 @@ flowchart TB
   DVIS -- "No" --> CHAT["POST /api/chat<br/>recent window + memory + system prompt"]
   CHAT --> REPLY["AI provider returns reply text"]
   REPLY --> CHUNK["Split into sentence chunks (lib/textChunks)"]
-  CHUNK --> TTS["Per chunk: TTS chain Deepgram → Gemini → browser<br/>prefetch next while current plays → PCM"]
+  CHUNK --> TTS["Streaming TTS: Deepgram (streamed) → Gemini (buffered) → browser<br/>plays 16kHz PCM as it arrives"]
   TTS --> DMODE{"Live avatar mode?"}
-  DMODE -- "Live" --> LIVE["Resample 16kHz → Simli → lip-synced video"]
-  DMODE -- "Still" --> STILL["Web Audio plays PCM over still image"]
+  DMODE -- "Live" --> LIVE["16kHz PCM stream → Simli → lip-synced video"]
+  DMODE -- "Still" --> STILL["Web Audio plays the PCM stream over still image"]
   LIVE -.->|"stream stalls"| WD["Watchdog → browser voice"]
   LIVE --> SPEAK(["Mira speaks · hands-free re-opens mic · barge-in stops anytime"])
   STILL --> SPEAK
@@ -135,7 +137,7 @@ flowchart TB
   subgraph FALLBACK["Graceful degradation"]
     direction TB
     F1["provider key missing → next provider → demo mode"]
-    F2["Deepgram fails → Gemini TTS → browser voice"]
+    F2["Deepgram stream fails → Gemini TTS (buffered) → browser voice"]
     F3["Simli unavailable → still image"]
     F4["offline → banner + Retry"]
     F5["Upstash down → in-memory limiter"]
@@ -159,6 +161,8 @@ flowchart TB
 ## 3. Sequence — voice call turn (live avatar mode)
 
 ![Voice call turn sequence](diagrams/sequence-voice-turn.png)
+
+> _Note: this PNG predates the streaming-TTS update — the Mermaid source below is current. Re-export to refresh._
 
 <details>
 <summary>Mermaid source</summary>
@@ -185,14 +189,12 @@ sequenceDiagram
   C->>AI: generate reply
   AI-->>C: reply text
   C-->>B: reply text
-  B->>B: split into sentence chunks (textChunks)
+  B->>G: POST /api/tts/deepgram (full reply)
+  G->>TD: allowed
+  TD->>DG: synthesize (stream)
 
-  loop for each sentence chunk (prefetch next)
-    B->>G: POST /api/tts/deepgram (chunk)
-    G->>TD: allowed
-    TD->>DG: synthesize
-    DG-->>B: PCM audio
-    B->>B: resample 24kHz to 16kHz
+  loop as PCM streams in
+    DG-->>B: 16kHz PCM bytes
     B->>S: sendAudioData(PCM)
   end
 
@@ -200,8 +202,8 @@ sequenceDiagram
   S-->>B: lip-synced video stream
   S-->>B: silent event -- UI state idle
 
-  alt Deepgram fails
-    B->>B: fall back to /api/tts (Gemini), then browser voice
+  alt Deepgram stream unavailable
+    B->>B: fall back to /api/tts (Gemini, buffered), then browser voice
   end
 
   alt Simli accepts audio but no speaking event within 5s
