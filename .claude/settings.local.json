@@ -16,7 +16,8 @@
       "Bash(git --no-pager diff HEAD -- app/api/simli-session/route.ts)",
       "Bash(git --no-pager diff HEAD -- app/page.tsx)",
       "PowerShell(npm install @upstash/ratelimit @upstash/redis 2>&1)",
-      "PowerShell(npm audit --omit=dev 2>&1)"
+      "PowerShell(npm audit --omit=dev 2>&1)",
+      "PowerShell(npx tsc --noEmit 2>&1)"
     ]
   }
 }

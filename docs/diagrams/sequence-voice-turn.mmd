@@ -21,14 +21,12 @@ sequenceDiagram
   C->>AI: generate reply
   AI-->>C: reply text
   C-->>B: reply text
-  B->>B: split into sentence chunks (textChunks)
+  B->>G: POST /api/tts/deepgram (full reply)
+  G->>TD: allowed
+  TD->>DG: synthesize (stream)
 
-  loop for each sentence chunk (prefetch next)
-    B->>G: POST /api/tts/deepgram (chunk)
-    G->>TD: allowed
-    TD->>DG: synthesize
-    DG-->>B: PCM audio
-    B->>B: resample 24kHz to 16kHz
+  loop as PCM streams in
+    DG-->>B: 16kHz PCM bytes
     B->>S: sendAudioData(PCM)
   end
 
@@ -36,8 +34,8 @@ sequenceDiagram
   S-->>B: lip-synced video stream
   S-->>B: silent event -- UI state idle
 
-  alt Deepgram fails
-    B->>B: fall back to /api/tts (Gemini), then browser voice
+  alt Deepgram stream unavailable
+    B->>B: fall back to /api/tts (Gemini, buffered), then browser voice
   end
 
   alt Simli accepts audio but no speaking event within 5s

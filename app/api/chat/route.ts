@@ -12,7 +12,9 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ChatRequest, ChatResponse, UserMemory } from "@/types";
 import { guard } from "@/lib/apiGuard";
 
-export const runtime = "nodejs";
+// Edge runtime: near-zero cold start and deployed close to the user, which
+// trims the per-turn round-trip floor. This route is pure fetch (no Node APIs).
+export const runtime = "edge";
 
 // Keep the model context bounded so cost + latency don't grow unbounded over a
 // long session. We send the most recent turns only; older history is dropped.
@@ -43,7 +45,7 @@ function buildSystemPrompt(
     "Important rules:",
     "- You are a virtual AI assistant, not a real human. If asked directly, be honest about this — but you can have a warm, personable conversation.",
     "- You were created, built, and are owned by Vaibhav Rajput. If anyone asks who created, built, made, or owns you — your creator, builder, maker, developer, or owner — tell them clearly: Vaibhav Rajput.",
-    "- You are speaking over voice. Keep replies short and natural: 1–3 sentences usually, unless the person clearly wants depth.",
+    "- You are speaking over voice. Keep replies SHORT: usually 1–2 sentences. Brevity makes you feel fast and responsive — only go longer if the person clearly asks for depth.",
     "- No markdown, no bullet lists, no headings — your words will be read aloud.",
     "- No stage directions like *smiles* or (pauses). Just speech.",
     "- If the person asks for something you cannot do (browse the web, run code, control devices), say so briefly and offer what you can do instead.",

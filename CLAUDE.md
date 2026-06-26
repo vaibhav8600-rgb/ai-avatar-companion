@@ -31,13 +31,13 @@ A single union type (`types/index.ts`: `idle | listening | thinking | speaking |
 ### Provider abstraction with graceful fallback
 Every external dependency degrades instead of failing:
 - **Chat** (`app/api/chat/route.ts`): `AI_PROVIDER` selects Anthropic/OpenAI/Gemini; falls back to any other configured provider, then a **mock "demo mode"** reply when no key is set. Only the **last ~20 turns** are sent (cost/latency cap) and payloads are size-capped.
-- **TTS**: a 3-tier chain — **Deepgram (`/api/tts/deepgram`) → Gemini (`/api/tts`) → browser SpeechSynthesis**. Server tiers return raw PCM; `lib/ttsAudio.ts` plays it (still mode) or `lib/useSimliAvatar.ts` resamples to 16 kHz for Simli (live mode).
+- **TTS**: a 3-tier chain — **Deepgram (`/api/tts/deepgram`, *streamed* 16 kHz PCM) → Gemini (`/api/tts`, buffered) → browser SpeechSynthesis**. The streaming path (`streamServerTts` in `lib/ttsAudio.ts` for still mode, `speakStream` in `lib/useSimliAvatar.ts` for live) plays audio as it arrives — first word in ~1s regardless of reply length. `fetchTtsAudio` is the buffered Gemini fallback (used by the chunked players). Toggle `USE_TTS_STREAMING` in `app/page.tsx`.
 - **Avatar**: Simli live video → static image. **Vision**: Gemini → OpenAI.
 
 `lib/voiceReply` (in `page.tsx`) is the **single voice pipeline** used by every spoken reply (chat + all vision flows + errors). Route new spoken output through it rather than calling TTS directly.
 
-### Sentence-chunked TTS
-`lib/textChunks.ts` splits long replies so playback starts after the first sentence; chunks prefetch the next while the current plays. **Gotcha:** `playServerTtsChunks` (and the Simli path) use a `playGeneration` token to cancel on barge-in, and `stopServerTts()` itself bumps that token — so you must call `stopServerTts()` **before** claiming this run's token, or the run cancels itself and nothing plays.
+### Streaming TTS (primary) + chunked fallback
+The fast path streams Deepgram's PCM and plays it as it arrives (`streamServerTts` / `speakStream`) — first audio is pinned to the connection floor (~1s) regardless of reply length. The buffered fallback (`fetchTtsAudio` → Gemini) uses `lib/textChunks.ts` to split long replies so playback starts after the first sentence, prefetching the next chunk while the current plays. **Gotcha:** both the chunk player and the streamer use a `playGeneration` token to cancel on barge-in, and `stopServerTts()` itself bumps that token — so call `stopServerTts()` **before** claiming a run's token, or the run cancels itself and nothing plays. `stopServerTts()` also cancels the active stream reader + scheduled sources; the Simli `clear()` cancels its own stream reader.
 
 ### Speech recognition (`lib/speechRecognition.ts`)
 `continuous = true` + a trailing-silence timer finalizes a turn (so mid-sentence pauses don't cut the user off). A `finalized` flag guards against late `onresult` events (mobile engines emit one after `stop()`); `onEnd` reports `finalized` so `page.tsx` can **auto-restart** the mic on a mobile silence cutoff and drive **hands-free** mode. Always clear interim transcript when starting a new listening session.

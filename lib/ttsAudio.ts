@@ -1,45 +1,32 @@
 "use client";
 
-// Client-side TTS: the shared server fetch chain (Deepgram → Gemini), plus
-// in-browser PCM playback for Still-image mode. Both server tiers return raw
-// PCM, so there's a single decode path. Tier 3 (browser Web Speech) lives in
-// the page's voiceReply, used when fetchTtsAudio throws.
+// Client-side TTS.
+//
+// Tier 1 — Deepgram, STREAMED: `streamServerTts` (still mode) and the Simli
+// hook read /api/tts/deepgram's PCM stream and play it as it arrives.
+// Tier 2 — Gemini, BUFFERED: `fetchTtsAudio` (used by the chunked players) is
+// the fallback when streaming fails. Returns a full PCM clip.
+// Tier 3 — the browser's Web Speech voice, in the page's voiceReply.
 
 import { base64ToUint8 } from "./audio";
 
 export interface TtsAudioResult {
   audioBase64: string;
+  /** PCM source sample rate; ignored for compressed formats. */
   sampleRate: number;
+  format: "pcm" | "mp3";
 }
 
 /**
- * Get TTS audio with fallback: try Deepgram (/api/tts/deepgram), then Gemini
- * (/api/tts). Both return raw PCM. Throws if both fail (caller then falls back
- * to the browser voice). `model`/`voice` apply to Gemini only.
+ * Buffered fallback: fetch a full TTS clip from Gemini (/api/tts → PCM). Throws
+ * if it fails (caller then falls back to the browser voice). Deepgram is no
+ * longer fetched here — it's the streaming primary (see `streamServerTts`).
  */
 export async function fetchTtsAudio(
   text: string,
   model?: string,
   voice?: string,
 ): Promise<TtsAudioResult> {
-  // Tier 1 — Deepgram Aura.
-  try {
-    const res = await fetch("/api/tts/deepgram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as TtsAudioResult & { audioBase64?: string };
-      if (data.audioBase64) {
-        return { audioBase64: data.audioBase64, sampleRate: data.sampleRate || 24000 };
-      }
-    }
-  } catch {
-    // fall through to Gemini
-  }
-
-  // Tier 2 — Gemini TTS model chain.
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,15 +42,18 @@ export async function fetchTtsAudio(
     }
     throw new Error(msg);
   }
-  const data = (await res.json()) as TtsAudioResult & { audioBase64?: string };
+  const data = (await res.json()) as { audioBase64?: string; sampleRate?: number };
   if (!data.audioBase64) throw new Error("TTS returned no audio");
-  return { audioBase64: data.audioBase64, sampleRate: data.sampleRate || 24000 };
+  return { audioBase64: data.audioBase64, sampleRate: data.sampleRate || 24000, format: "pcm" };
 }
 
 // ----- in-browser playback (Still mode) -----
 
 let audioCtx: AudioContext | null = null;
 let currentSource: AudioBufferSourceNode | null = null;
+// Streaming-mode state (so barge-in can cancel an in-flight stream + its sources).
+let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+const scheduledSources = new Set<AudioBufferSourceNode>();
 
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -84,9 +74,25 @@ export function primeTtsAudio(): void {
   if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
 }
 
-/** Stop any in-progress server-TTS playback (and cancel a chunk sequence). */
+/** Stop any in-progress server-TTS playback (chunk sequence OR stream). */
 export function stopServerTts(): void {
-  playGeneration++; // supersede any running chunk loop
+  playGeneration++; // supersede any running chunk/stream loop
+  if (activeReader) {
+    try {
+      activeReader.cancel();
+    } catch {
+      // ignore
+    }
+    activeReader = null;
+  }
+  for (const s of scheduledSources) {
+    try {
+      s.stop();
+    } catch {
+      // already stopped
+    }
+  }
+  scheduledSources.clear();
   if (currentSource) {
     try {
       currentSource.stop();
@@ -124,6 +130,16 @@ function pcmToBuffer(ctx: AudioContext, audioBase64: string, sampleRate: number)
   return buffer;
 }
 
+/** Decode a TTS result into a playable AudioBuffer (MP3 via Web Audio, else PCM). */
+async function decodeToAudioBuffer(ctx: AudioContext, r: TtsAudioResult): Promise<AudioBuffer> {
+  if (r.format === "mp3") {
+    const bytes = base64ToUint8(r.audioBase64);
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    return ctx.decodeAudioData(ab);
+  }
+  return pcmToBuffer(ctx, r.audioBase64, r.sampleRate || 24000);
+}
+
 /** Play one decoded buffer to completion (or until stopped). */
 function playBuffer(
   ctx: AudioContext,
@@ -156,8 +172,8 @@ export async function playServerTts(opts: PlayOptions): Promise<void> {
   if (!ctx) throw new Error("Web Audio unavailable");
   if (ctx.state === "suspended") await ctx.resume().catch(() => {});
 
-  const { audioBase64, sampleRate } = await fetchTtsAudio(opts.text, opts.model, opts.voice);
-  const buffer = pcmToBuffer(ctx, audioBase64, sampleRate || 24000);
+  const result = await fetchTtsAudio(opts.text, opts.model, opts.voice);
+  const buffer = await decodeToAudioBuffer(ctx, result);
   stopServerTts();
   await playBuffer(ctx, buffer, opts.volume ?? 1, opts.onPlay);
 }
@@ -212,9 +228,144 @@ export async function playServerTtsChunks(opts: PlayChunksOptions): Promise<void
       nextFetch.catch(() => {}); // avoid unhandled rejection; handled on await
     }
 
-    const buffer = pcmToBuffer(ctx, audio.audioBase64, audio.sampleRate || 24000);
-    if (!stillCurrent()) return;
-    await playBuffer(ctx, buffer, opts.volume ?? 1, i === 0 ? opts.onFirstPlay : undefined);
+    try {
+      const buffer = await decodeToAudioBuffer(ctx, audio);
+      if (!stillCurrent()) return;
+      await playBuffer(ctx, buffer, opts.volume ?? 1, i === 0 ? opts.onFirstPlay : undefined);
+    } catch (err) {
+      if (i === 0) throw err; // first-chunk decode failed → caller falls back
+      break; // later chunk failed → stop gracefully
+    }
     if (!stillCurrent()) return;
   }
+}
+
+interface StreamOptions {
+  text: string;
+  volume?: number;
+  /** Fired once, when the first audio is scheduled to play. */
+  onFirstPlay?: () => void;
+}
+
+// Schedule incoming PCM in ~120ms blocks; small enough to start fast, large
+// enough to avoid excessive source nodes.
+const STREAM_SAMPLE_RATE = 16000;
+const STREAM_FLUSH_BYTES = STREAM_SAMPLE_RATE * 2 * 0.12; // ~120ms of 16-bit mono
+
+/**
+ * Stream TTS from Deepgram (/api/tts/deepgram) and play the PCM as it arrives —
+ * first audio starts on the first bytes instead of after the whole clip. Resolves
+ * when playback finishes (or is superseded). THROWS if the stream is unavailable
+ * or produced no audio, so the caller can fall back to the buffered/browser tiers.
+ */
+export async function streamServerTts(opts: StreamOptions): Promise<void> {
+  const ctx = getCtx();
+  if (!ctx) throw new Error("Web Audio unavailable");
+  if (ctx.state === "suspended") await ctx.resume().catch(() => {});
+
+  // Supersede any previous playback, then claim this run's token.
+  stopServerTts();
+  const myGen = ++playGeneration;
+  const stillCurrent = () => myGen === playGeneration;
+
+  const res = await fetch("/api/tts/deepgram", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: opts.text }),
+  });
+  const ctype = res.headers.get("content-type") || "";
+  if (!res.ok || !res.body || !ctype.startsWith("audio/")) {
+    throw new Error("Deepgram stream unavailable");
+  }
+
+  const reader = res.body.getReader();
+  activeReader = reader;
+
+  const volume = opts.volume ?? 1;
+  let nextTime = 0;
+  let started = false;
+  let leftover: Uint8Array | null = null;
+  let lastSource: AudioBufferSourceNode | null = null;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+
+  const scheduleFloats = (floats: Float32Array) => {
+    const buffer = ctx.createBuffer(1, floats.length, STREAM_SAMPLE_RATE);
+    buffer.getChannelData(0).set(floats);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    source.connect(gain).connect(ctx.destination);
+    const now = ctx.currentTime;
+    // Lead slightly; reset the clock if we ever fell behind (underrun).
+    if (nextTime < now + 0.05) nextTime = now + 0.08;
+    source.start(nextTime);
+    nextTime += buffer.duration;
+    scheduledSources.add(source);
+    source.onended = () => scheduledSources.delete(source);
+    lastSource = source;
+    if (!started) {
+      started = true;
+      opts.onFirstPlay?.();
+    }
+  };
+
+  const flushPending = () => {
+    if (pendingBytes === 0 && !leftover) return;
+    let merged = new Uint8Array(pendingBytes);
+    let o = 0;
+    for (const p of pending) {
+      merged.set(p, o);
+      o += p.length;
+    }
+    pending = [];
+    pendingBytes = 0;
+    if (leftover) {
+      const m = new Uint8Array(leftover.length + merged.length);
+      m.set(leftover, 0);
+      m.set(merged, leftover.length);
+      merged = m;
+      leftover = null;
+    }
+    const evenLen = merged.length - (merged.length % 2);
+    if (merged.length % 2) leftover = merged.slice(evenLen);
+    if (evenLen === 0) return;
+    const view = new DataView(merged.buffer, merged.byteOffset, evenLen);
+    const n = evenLen / 2;
+    const floats = new Float32Array(n);
+    for (let i = 0; i < n; i++) floats[i] = view.getInt16(i * 2, true) / 32768;
+    scheduleFloats(floats);
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (!stillCurrent()) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      if (done) break;
+      if (value && value.length) {
+        pending.push(value);
+        pendingBytes += value.length;
+        if (pendingBytes >= STREAM_FLUSH_BYTES) flushPending();
+      }
+    }
+    flushPending();
+  } finally {
+    if (activeReader === reader) activeReader = null;
+  }
+
+  if (!started) throw new Error("Deepgram stream produced no audio");
+
+  // Resolve when the last scheduled buffer finishes (or we get superseded).
+  await new Promise<void>((resolve) => {
+    if (!stillCurrent() || !lastSource) return resolve();
+    lastSource.addEventListener("ended", () => resolve(), { once: true });
+  });
 }

@@ -16,8 +16,8 @@
 // static image + browser speech.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { decodeToSimliPcm } from "./audio";
-import { fetchTtsAudio } from "./ttsAudio";
+import { decodeToSimliPcm, decodeCompressedToSimliPcm } from "./audio";
+import { fetchTtsAudio, type TtsAudioResult } from "./ttsAudio";
 
 // Minimal shape of the bits of SimliClient we use (avoids importing the type
 // at module scope, which would pull the browser-only module into SSR).
@@ -46,11 +46,20 @@ interface UseSimliAvatarCallbacks {
 // at 16kHz — small enough to stream smoothly, large enough to be efficient.
 const CHUNK_BYTES = 6000;
 
+/** Decode a TTS result to 16kHz PCM16 for Simli (MP3 → decode, else resample). */
+function decodeForSimli(audio: TtsAudioResult): Promise<Uint8Array> {
+  return audio.format === "mp3"
+    ? decodeCompressedToSimliPcm(audio.audioBase64, 16000)
+    : decodeToSimliPcm(audio.audioBase64, audio.sampleRate || 24000, 16000);
+}
+
 export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const clientRef = useRef<SimliClientLike | null>(null);
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+  // In-flight Deepgram stream reader, so barge-in (clear) can cancel it.
+  const streamReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const [status, setStatus] = useState<SimliStatus>("idle");
 
   // Keep callbacks in a ref so the connect/speak functions stay stable.
@@ -137,8 +146,8 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
       const client = clientRef.current;
       if (!client) throw new Error("Avatar not connected");
 
-      const { audioBase64, sampleRate } = await fetchTtsAudio(text, model, voice);
-      const pcm = await decodeToSimliPcm(audioBase64, sampleRate || 24000, 16000);
+      const audio = await fetchTtsAudio(text, model, voice);
+      const pcm = await decodeForSimli(audio);
 
       for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
         client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
@@ -172,18 +181,86 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
           nextFetch = fetchTtsAudio(chunks[i + 1], model, voice);
           nextFetch.catch(() => {});
         }
-        const pcm = await decodeToSimliPcm(audio.audioBase64, audio.sampleRate || 24000, 16000);
-        for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-          client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+        try {
+          const pcm = await decodeForSimli(audio);
+          for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+            client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+          }
+        } catch (err) {
+          if (i === 0) throw err; // first-chunk decode failed → caller falls back
+          break; // later chunk failed → stop gracefully
         }
       }
     },
     [],
   );
 
+  /**
+   * Stream TTS from Deepgram straight into Simli as it's synthesized — fastest
+   * path to first lip movement. Throws if the stream is unavailable / empty so
+   * the caller can fall back to the buffered (Gemini) path.
+   */
+  const speakStream = useCallback(async (text: string): Promise<void> => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Avatar not connected");
+
+    const res = await fetch("/api/tts/deepgram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const ctype = res.headers.get("content-type") || "";
+    if (!res.ok || !res.body || !ctype.startsWith("audio/")) {
+      throw new Error("Deepgram stream unavailable");
+    }
+
+    const reader = res.body.getReader();
+    streamReaderRef.current = reader;
+    let leftover: Uint8Array | null = null;
+    let sent = false;
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        // Superseded / barged-in: a newer call replaced our reader.
+        if (streamReaderRef.current !== reader) return;
+        if (done) break;
+        if (!value || !value.length) continue;
+
+        let buf = value;
+        if (leftover) {
+          const m = new Uint8Array(leftover.length + buf.length);
+          m.set(leftover, 0);
+          m.set(buf, leftover.length);
+          buf = m;
+          leftover = null;
+        }
+        const evenLen = buf.length - (buf.length % 2);
+        if (buf.length % 2) leftover = buf.slice(evenLen);
+        const pcm = buf.subarray(0, evenLen);
+        for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+          client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+          sent = true;
+        }
+      }
+    } finally {
+      if (streamReaderRef.current === reader) streamReaderRef.current = null;
+    }
+
+    if (!sent) throw new Error("Deepgram stream produced no audio");
+  }, []);
+
   /** Stop the avatar mid-sentence (used when the user starts talking). */
   const clear = useCallback(() => {
     clientRef.current?.ClearBuffer();
+    if (streamReaderRef.current) {
+      try {
+        streamReaderRef.current.cancel();
+      } catch {
+        // ignore
+      }
+      streamReaderRef.current = null;
+    }
   }, []);
 
   /** Tear down the stream entirely (e.g. when the user switches to image mode). */
@@ -203,5 +280,5 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     };
   }, []);
 
-  return { videoRef, audioRef, status, ensureConnected, speak, speakChunks, clear, stop };
+  return { videoRef, audioRef, status, ensureConnected, speak, speakChunks, speakStream, clear, stop };
 }

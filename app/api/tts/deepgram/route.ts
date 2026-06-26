@@ -1,9 +1,12 @@
-// Server-only: primary TTS via Deepgram Aura. Returns raw linear16 PCM (same
-// shape as /api/tts) so it drops straight into the existing pipeline — live
-// mode resamples it for Simli, still mode plays it via Web Audio.
+// Server-only: primary TTS via Deepgram Aura, STREAMED.
 //
-// Tier 1 of the voice chain. If this fails / has no key / times out, the client
-// falls back to Gemini TTS (/api/tts), then to the browser's Web Speech voice.
+// Returns raw linear16 PCM (16kHz mono) and pipes Deepgram's response straight
+// through to the browser as it's synthesized — so playback can start on the
+// first bytes instead of waiting for the whole clip. (Network traces showed the
+// old "buffer the entire clip" approach was the dominant latency source.)
+//
+// Tier 1 of the voice chain. On any failure it returns a JSON error so the
+// client falls back to Gemini TTS (/api/tts), then the browser's Web Speech voice.
 
 import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/apiGuard";
@@ -11,15 +14,16 @@ import { guard } from "@/lib/apiGuard";
 export const runtime = "nodejs";
 
 const MAX_TEXT = 2000;
-const TIMEOUT_MS = 15000;
-const SAMPLE_RATE = 24000;
+// Budget to first byte only; cleared once the stream starts flowing.
+const CONNECT_TIMEOUT_MS = 12000;
+const SAMPLE_RATE = 16000;
 
 interface DeepgramBody {
   text?: string;
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse> {
-  const blocked = await guard(req, "tts-deepgram", { limit: 90, windowMs: 60_000 });
+export async function POST(req: NextRequest): Promise<Response> {
+  const blocked = await guard(req, "tts-deepgram", { limit: 90, windowMs: 60_000, localOnly: true });
   if (blocked) return blocked;
 
   const apiKey = process.env.DEEPGRAM_API_KEY;
@@ -48,14 +52,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .replace(/^model=/i, "")
     .split(/\s+/)[0]
     .trim();
+
+  // Raw 16kHz PCM, streamed (container=none). Simli consumes 16kHz PCM directly.
   const url =
     `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}` +
     `&encoding=linear16&sample_rate=${SAMPLE_RATE}&container=none`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
+
+  let res: Response;
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Token ${apiKey}`,
@@ -64,26 +72,30 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       body: JSON.stringify({ text }),
       signal: controller.signal,
     });
-
-    if (!res.ok) {
-      const detail = await res.text();
-      throw new Error(`Deepgram ${res.status}: ${detail.slice(0, 200)}`);
-    }
-
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (!buffer.length) throw new Error("empty audio");
-
-    return NextResponse.json({
-      audioBase64: buffer.toString("base64"),
-      sampleRate: SAMPLE_RATE,
-      format: "pcm",
-    });
   } catch (err) {
+    clearTimeout(timer);
     const detail = err instanceof Error ? err.message : "Unknown error";
     console.error("Deepgram TTS failed:", detail);
-    // Surface the upstream reason (status + message, no key) to aid debugging.
     return NextResponse.json({ error: "Deepgram TTS failed.", detail }, { status: 502 });
-  } finally {
-    clearTimeout(timer);
   }
+
+  if (!res.ok || !res.body) {
+    clearTimeout(timer);
+    const detail = await res.text().catch(() => "");
+    console.error("Deepgram TTS failed:", res.status, detail.slice(0, 200));
+    return NextResponse.json(
+      { error: "Deepgram TTS failed.", detail: `${res.status}: ${detail.slice(0, 200)}` },
+      { status: 502 },
+    );
+  }
+
+  // Headers are in — stop the connect timer and stream the audio through.
+  clearTimeout(timer);
+  return new Response(res.body, {
+    status: 200,
+    headers: {
+      "Content-Type": `audio/L16;rate=${SAMPLE_RATE}`,
+      "Cache-Control": "no-store",
+    },
+  });
 }
