@@ -1,0 +1,48 @@
+%% Mira — Voice Call Turn (live avatar mode)
+%% Render: https://mermaid.live  or  mmdc -i sequence-voice-turn.mmd -o sequence-voice-turn.svg
+sequenceDiagram
+  autonumber
+  actor User
+  participant B as Browser (page.tsx)
+  participant SR as Web Speech API
+  participant G as apiGuard
+  participant C as /api/chat
+  participant AI as AI Provider
+  participant TD as /api/tts/deepgram
+  participant DG as Deepgram
+  participant S as Simli
+
+  User->>SR: speak
+  SR-->>B: onPartial(interim) [captions]
+  SR-->>B: onFinal(transcript) [silence finalize]
+  B->>G: POST /api/chat (transcript + memory + recent history)
+  G->>G: same-origin + rate limit (Upstash / in-memory)
+  G->>C: allowed
+  C->>AI: generate reply
+  AI-->>C: reply text
+  C-->>B: reply text
+  B->>B: split into sentence chunks (textChunks)
+
+  loop for each sentence chunk (prefetch next)
+    B->>G: POST /api/tts/deepgram (chunk)
+    G->>TD: allowed
+    TD->>DG: synthesize
+    DG-->>B: PCM audio
+    B->>B: resample 24kHz to 16kHz
+    B->>S: sendAudioData(PCM)
+  end
+
+  S-->>B: speaking event -- UI state speaking
+  S-->>B: lip-synced video stream
+  S-->>B: silent event -- UI state idle
+
+  alt Deepgram fails
+    B->>B: fall back to /api/tts (Gemini), then browser voice
+  end
+
+  alt Simli accepts audio but no speaking event within 5s
+    B->>B: watchdog clears Simli and uses browser voice
+  end
+
+  User->>B: starts talking again
+  B->>S: ClearBuffer() barge-in

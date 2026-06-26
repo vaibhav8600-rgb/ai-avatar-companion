@@ -1,0 +1,45 @@
+%% Mira — Conversation Flow (voice + vision)
+%% Render: https://mermaid.live  or  mmdc -i flow.mmd -o flow.svg
+flowchart TB
+  START(["User speaks (or types)"]) --> STT["Web Speech API transcribes<br/>silence-finalize · mobile auto-restart · hands-free"]
+  STT --> DVIS{"Camera open in Live Vision?"}
+
+  DVIS -- "Yes" --> CLS["visionIntentRouter classifies turn"]
+  CLS --> DINT{"Vision intent?"}
+  DINT -- "describe / recognize" --> VCAP["Capture frame + saved thumbnails<br/>POST /api/vision/analyze"]
+  VCAP --> VJSON["Vision JSON: description, matchedLabel"]
+  VJSON --> SPEAK
+  DINT -- "remember object/person" --> VSAVE["Capture (+consent gate for people)<br/>save to IndexedDB"]
+  VSAVE --> SPEAK
+  DINT -- "normal_chat" --> CHAT
+
+  DVIS -- "No" --> CHAT["POST /api/chat<br/>recent window + memory + system prompt"]
+  CHAT --> REPLY["AI provider returns reply text"]
+  REPLY --> CHUNK["Split into sentence chunks (lib/textChunks)"]
+  CHUNK --> TTS["Per chunk: TTS chain Deepgram → Gemini → browser<br/>prefetch next while current plays → PCM"]
+  TTS --> DMODE{"Live avatar mode?"}
+  DMODE -- "Live" --> LIVE["Resample 16kHz → Simli → lip-synced video"]
+  DMODE -- "Still" --> STILL["Web Audio plays PCM over still image"]
+  LIVE -.->|"stream stalls"| WD["Watchdog → browser voice"]
+  LIVE --> SPEAK(["Mira speaks · hands-free re-opens mic · barge-in stops anytime"])
+  STILL --> SPEAK
+  WD --> SPEAK
+
+  subgraph FALLBACK["Graceful degradation"]
+    direction TB
+    F1["provider key missing → next provider → demo mode"]
+    F2["Deepgram fails → Gemini TTS → browser voice"]
+    F3["Simli unavailable → still image"]
+    F4["offline → banner + Retry"]
+    F5["Upstash down → in-memory limiter"]
+  end
+
+  classDef io fill:#e7f0ff,stroke:#5b8def,color:#13243a;
+  classDef proc fill:#e3f7f4,stroke:#3aa99a,color:#0f2e2a;
+  classDef dec fill:#fdf0db,stroke:#d6a44c,color:#3a2c10;
+  classDef fb fill:#eef0f2,stroke:#9aa3ad,color:#23292f;
+
+  class START,SPEAK io;
+  class STT,CLS,VCAP,VJSON,VSAVE,CHAT,REPLY,CHUNK,TTS,LIVE,STILL,WD proc;
+  class DVIS,DINT,DMODE dec;
+  class F1,F2,F3,F4,F5 fb;

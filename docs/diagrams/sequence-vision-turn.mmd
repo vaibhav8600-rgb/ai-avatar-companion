@@ -1,0 +1,43 @@
+%% Mira Vision — Remember / Recognize Turn (voice-first)
+%% Render: https://mermaid.live  or  mmdc -i sequence-vision-turn.mmd -o sequence-vision-turn.svg
+sequenceDiagram
+  autonumber
+  actor User
+  participant B as Browser (page.tsx)
+  participant R as visionIntentRouter
+  participant Cam as Camera (useCamera)
+  participant G as apiGuard
+  participant V as /api/vision/analyze
+  participant VP as Vision Provider
+  participant IDB as IndexedDB
+  participant Voice as Voice pipeline
+
+  Note over B,Cam: Camera already open in Live Vision
+  User->>B: speak (e.g. "do you remember this?")
+  B->>R: classify(transcript)
+  R-->>B: intent + label
+
+  alt describe / recognize
+    B->>Cam: capture frame
+    Cam-->>B: JPEG frame
+    B->>IDB: list saved thumbnails (candidates)
+    IDB-->>B: thumbnails
+    B->>G: POST /api/vision/analyze (frame + thumbnails)
+    G->>V: allowed
+    V->>VP: compare image-to-image
+    VP-->>B: JSON: description, matchedLabel, confidence
+    B->>B: matchMemory (prefer matchedLabel)
+    B->>Voice: speak result
+  else remember object
+    B->>Cam: capture frame
+    Cam-->>B: frame
+    B->>IDB: save object memory
+    B->>Voice: confirm by voice
+  else remember person
+    B->>User: ask consent
+    User-->>B: confirm
+    B->>IDB: save person (consented)
+    B->>Voice: confirm by voice
+  else normal_chat
+    B->>B: fall through to /api/chat turn
+  end

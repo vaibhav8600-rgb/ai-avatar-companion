@@ -92,35 +92,11 @@ external providers. API keys live exclusively on the server; the browser never
 sees `SIMLI_API_KEY` or any AI key — only a short-lived Simli session token and
 synthesized audio.
 
-### High-level diagram
+![Mira system architecture](docs/diagrams/architecture.png)
 
-```
-┌───────────────────────────── Browser (client) ──────────────────────────────┐
-│  app/page.tsx — conversation orchestrator                                     │
-│                                                                               │
-│  Input              Output                  Vision              Persistence    │
-│  • Web Speech STT   • AvatarStage           • useCamera         • localStorage │
-│  • hands-free /       (live video / still)  • visionIntentRouter   (memory,    │
-│    auto-restart     • Web Audio PCM play    • frame capture        history,    │
-│  • barge-in         • SpeechSynthesis       • IndexedDB store      settings)   │
-│  • captions           (fallback voice)        (visual memory)                  │
-└───────┬───────────────────────────────────────────────────────────┬──────────┘
-        │ fetch()  (same origin)                                      │ WebRTC media
-        ▼                                                             ▼
-┌──────────────── Next.js API routes · runtime "nodejs" ───────────┐   ┌─────────┐
-│  lib/apiGuard.ts → same-origin / x-api-secret  +  rate limit      │   │  Simli  │
-│  ───────────────────────────────────────────────────────────     │   │  live   │
-│  POST /api/chat            Anthropic │ OpenAI │ Gemini   → text    │   │ avatar  │
-│  POST /api/tts/deepgram    Deepgram Aura                → PCM     │◀──│ (lip-   │
-│  POST /api/tts             Gemini TTS model chain        → PCM     │   │  sync)  │
-│  POST /api/vision/analyze  Gemini │ OpenAI vision        → JSON    │   └─────────┘
-│  POST /api/simli-session   Simli token mint             → token   │
-└───────┬───────────────────────────────────────────────┬─────────┘
-        │ provider API keys live here ONLY               │ rate-limit state
-        ▼                                                ▼
-  AI / TTS / Vision providers                   Upstash Redis (prod)
-                                                in-memory Map (dev / fallback)
-```
+> 📊 **More diagrams** — the conversation flow and the voice / vision sequence
+> diagrams (plus editable Mermaid sources) live in
+> **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 Every route first passes through **`guard()`** ([lib/apiGuard.ts](lib/apiGuard.ts)):
 a same-origin / shared-secret check, then a per-IP sliding-window rate limit
