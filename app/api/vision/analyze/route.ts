@@ -181,7 +181,7 @@ async function analyzeWithOpenAI(
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const blocked = guard(req, "vision", { limit: 30, windowMs: 60_000 });
+  const blocked = await guard(req, "vision", { limit: 30, windowMs: 60_000 });
   if (blocked) return blocked;
 
   let body: VisionBody;

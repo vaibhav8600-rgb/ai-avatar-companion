@@ -14,7 +14,9 @@
       "PowerShell(npx next build)",
       "Bash(git --no-pager diff --stat HEAD -- lib/useSimliAvatar.ts app/page.tsx app/api/simli-session/route.ts lib/apiGuard.ts)",
       "Bash(git --no-pager diff HEAD -- app/api/simli-session/route.ts)",
-      "Bash(git --no-pager diff HEAD -- app/page.tsx)"
+      "Bash(git --no-pager diff HEAD -- app/page.tsx)",
+      "PowerShell(npm install @upstash/ratelimit @upstash/redis 2>&1)",
+      "PowerShell(npm audit --omit=dev 2>&1)"
     ]
   }
 }

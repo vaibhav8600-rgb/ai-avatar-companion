@@ -187,7 +187,7 @@ function mockReply(lastUser: string, assistantName: string): string {
 // ----- handler -----
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const blocked = guard(req, "chat", { limit: 30, windowMs: 60_000 });
+  const blocked = await guard(req, "chat", { limit: 30, windowMs: 60_000 });
   if (blocked) return blocked;
 
   let body: ChatRequest;

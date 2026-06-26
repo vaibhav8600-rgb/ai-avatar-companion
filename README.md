@@ -84,43 +84,116 @@ microphone permission, and speak.
 
 ---
 
-## How it works
+## Architecture & flow
+
+Everything is a **thin Next.js app**: a rich client (the orchestrator in
+`app/page.tsx`) talks only to **same-origin API routes**, which proxy the
+external providers. API keys live exclusively on the server; the browser never
+sees `SIMLI_API_KEY` or any AI key — only a short-lived Simli session token and
+synthesized audio.
+
+### High-level diagram
 
 ```
-                         ┌──────────────────────────────────────────────┐
-                         │            Next.js server routes             │
-                         │             (API keys live here)             │
-   ┌──────────────┐      │                                              │
-   │   Browser    │ ───▶ │  POST /api/chat        → Anthropic / OpenAI  │
-   │              │      │                          / Google (Gemini)   │
-   │  Web Speech  │ ◀─── │                                              │
-   │     (STT)    │      │  POST /api/tts          → Gemini TTS (audio) │
-   │              │      │                                              │
-   │  <video> +   │      │  POST /api/simli-session → Simli token       │
-   │  <audio>     │      └──────────────────────────────────────────────┘
-   └──────┬───────┘
-          │  session token + 16kHz PCM audio
-          ▼
-   ┌──────────────┐
-   │  Simli (WebRTC)  → streams a real-time lip-synced video back │
-   └──────────────────────────────────────────────────────────────┘
+┌───────────────────────────── Browser (client) ──────────────────────────────┐
+│  app/page.tsx — conversation orchestrator                                     │
+│                                                                               │
+│  Input              Output                  Vision              Persistence    │
+│  • Web Speech STT   • AvatarStage           • useCamera         • localStorage │
+│  • hands-free /       (live video / still)  • visionIntentRouter   (memory,    │
+│    auto-restart     • Web Audio PCM play    • frame capture        history,    │
+│  • barge-in         • SpeechSynthesis       • IndexedDB store      settings)   │
+│  • captions           (fallback voice)        (visual memory)                  │
+└───────┬───────────────────────────────────────────────────────────┬──────────┘
+        │ fetch()  (same origin)                                      │ WebRTC media
+        ▼                                                             ▼
+┌──────────────── Next.js API routes · runtime "nodejs" ───────────┐   ┌─────────┐
+│  lib/apiGuard.ts → same-origin / x-api-secret  +  rate limit      │   │  Simli  │
+│  ───────────────────────────────────────────────────────────     │   │  live   │
+│  POST /api/chat            Anthropic │ OpenAI │ Gemini   → text    │   │ avatar  │
+│  POST /api/tts/deepgram    Deepgram Aura                → PCM     │◀──│ (lip-   │
+│  POST /api/tts             Gemini TTS model chain        → PCM     │   │  sync)  │
+│  POST /api/vision/analyze  Gemini │ OpenAI vision        → JSON    │   └─────────┘
+│  POST /api/simli-session   Simli token mint             → token   │
+└───────┬───────────────────────────────────────────────┬─────────┘
+        │ provider API keys live here ONLY               │ rate-limit state
+        ▼                                                ▼
+  AI / TTS / Vision providers                   Upstash Redis (prod)
+                                                in-memory Map (dev / fallback)
 ```
 
-A single conversation turn:
+Every route first passes through **`guard()`** ([lib/apiGuard.ts](lib/apiGuard.ts)):
+a same-origin / shared-secret check, then a per-IP sliding-window rate limit
+(distributed via Upstash in prod, in-memory in dev). See
+[Abuse & cost protection](#abuse--cost-protection).
 
-1. **You speak** → the browser transcribes it locally with the Web Speech API.
-2. The transcript goes to **`/api/chat`**, which forwards it (plus your memory
-   and a system prompt) to the configured AI provider and returns the reply.
-3. The reply text goes to **`/api/tts`**, which uses Gemini to synthesize speech
-   audio (raw PCM).
-4. The browser resamples that audio to 16 kHz and streams it to **Simli**, which
-   renders a photoreal face whose lips and expressions move with the voice.
-5. If Simli or TTS isn't available, the reply is instead spoken by the browser's
-   built-in `SpeechSynthesis` over the still image — same conversation, simpler
-   visuals.
+### A voice-call turn (step by step)
 
-API keys never leave the server: the browser only ever receives a short-lived
-Simli **session token**, never `SIMLI_API_KEY` or any AI provider key.
+```
+You speak ─▶ Web Speech STT ─▶ [Live Vision? classify intent] ─▶ POST /api/chat
+                                                                       │ reply text
+                                                                       ▼
+                                      split into sentence chunks (lib/textChunks)
+                                                                       │
+                         ┌─────────────────────────────────────────────┘
+                         ▼  per chunk, prefetch next while current plays
+              TTS chain:  Deepgram ─▶ Gemini TTS ─▶ browser SpeechSynthesis
+                         │ PCM                         │ (last-resort voice)
+              ┌──────────┴───────────┐
+              ▼ live mode            ▼ still mode
+   resample 16kHz → Simli      Web Audio plays PCM
+   (lip-synced video)          (over still image)
+```
+
+1. **You speak** → transcribed locally by the Web Speech API. Mid-sentence
+   pauses don't cut you off (silence-finalize); on mobile the mic auto-restarts
+   if the engine self-stops, and **hands-free mode** re-opens it after each reply.
+2. If the camera is open in **Live Vision**, the turn is first classified by
+   `visionIntentRouter`; a vision intent captures a frame and may answer directly
+   or attach "what the camera sees" context to the chat call.
+3. The transcript (recent-turn window + memory + system prompt) goes to
+   **`/api/chat`**, which calls the configured provider and returns the reply.
+4. The reply is split into **sentence chunks**; each chunk's audio is fetched
+   through the TTS chain (**Deepgram → Gemini → browser**) while the previous
+   chunk plays, so she starts talking after the first sentence.
+5. **Live mode:** PCM is resampled to 16 kHz and streamed to **Simli**, which
+   lip-syncs a photoreal face. **Still mode:** the PCM is played via Web Audio
+   over the still image. A **watchdog** recovers to the browser voice if the live
+   stream accepts audio but never starts speaking.
+6. **Barge-in:** start talking (or tap the mic) and any in-progress speech stops
+   immediately.
+
+### A Mira Vision turn
+
+```
+Camera open ─▶ you talk ─▶ visionIntentRouter (regex classify)
+                              │
+         ┌────────────────────┼──────────────────────────┐
+         ▼ describe/recognize ▼ remember (object/person)  ▼ normal_chat
+   capture frame +        capture + (consent gate for     fall through to
+   saved thumbnails ─▶    people) ─▶ save to IndexedDB    /api/chat
+   POST /api/vision/analyze
+         │ structured JSON (description, matchedLabel, …)
+         ▼
+   spoken reply via the same voice pipeline
+```
+
+Recognition sends your saved **thumbnails alongside the live frame**, so the
+model compares **image-to-image** and returns the matching label directly. No
+video is ever stored — only thumbnails you capture, in your browser's IndexedDB.
+
+### Graceful degradation (nothing hard-fails)
+
+| If this is missing / fails… | …the app does this instead |
+| --- | --- |
+| Chosen AI provider key | Falls back to any other configured provider, then demo mode |
+| Deepgram TTS | Falls back to Gemini TTS, then the browser voice |
+| Simli (live avatar) | Falls back to still image + browser/Web-Audio voice |
+| Live stream stalls | Watchdog recovers to the browser voice |
+| Camera / mic denied | Voice/vision disabled gracefully; text chat still works |
+| Network offline | Offline banner + one-tap Retry on the failed turn |
+| Upstash Redis | Falls back to the in-memory rate limiter |
+| Web Speech API (e.g. Firefox) | Use the text chat / text input |
 
 ---
 
@@ -194,15 +267,43 @@ burn your paid quota ([lib/apiGuard.ts](lib/apiGuard.ts)):
 - **Same-origin check** — requests from other origins are rejected (`403`). Set
   `API_SHARED_SECRET` and send it as an `x-api-secret` header to allow a trusted
   programmatic caller through.
-- **Per-IP rate limit** — a sliding window per route (`429` with `Retry-After`
+- **Per-IP sliding-window rate limit** — per route (`429` with `Retry-After`
   when exceeded). Limits are tuned per route (chat/vision lower, TTS higher
   since chunked replies make several calls).
 - **Payload caps** — `/api/chat` bounds message count/size and only the recent
   window of turns is sent to the model.
 
-> The limiter is **in-memory (per instance)** — fine for a single-region deploy.
-> For multi-instance scaling, swap it for a shared store (e.g. Upstash/Redis);
-> the `guard()` interface stays the same.
+### Distributed rate limiting (Upstash Redis)
+
+The limiter is **serverless-friendly**: in-memory `Map`s reset every time a
+Vercel function cold-starts, so they're ineffective across instances. When you
+set both env vars, the guard uses a **distributed** limiter
+([@upstash/ratelimit](https://github.com/upstash/ratelimit-js) + Redis) shared
+by all instances:
+
+| Var | Purpose |
+| --- | --- |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
+
+```bash
+npm install @upstash/ratelimit @upstash/redis
+```
+
+Create a free database at <https://console.upstash.com/>, copy its REST URL +
+token into `.env.local`, and it activates automatically. Performance details:
+
+- A shared in-instance **`ephemeralCache`** short-circuits repeat hits, so a
+  blocked IP doesn't trigger a Redis round-trip on every request — lower latency
+  and fewer Redis calls.
+- Redis client + `Ratelimit` instances are **singletons** reused across warm
+  invocations; analytics writes are disabled to keep each check cheap.
+- If the env vars are **absent** (local dev) the guard transparently falls back
+  to the in-memory limiter — no Redis setup required. The same fallback also
+  catches a Redis outage, so a transient failure can't take the app down.
+
+> `guard()` is async (the distributed check is a network call); routes simply
+> `await guard(...)`. Its signature is otherwise unchanged.
 >
 > **Rotate any keys** that have been shared in plaintext — they're treated as
 > compromised.
@@ -237,7 +338,7 @@ ai-avatar-companion/
 │   └── ErrorBoundary.tsx
 ├── lib/
 │   ├── apiClient.ts               # Frontend → /api/chat
-│   ├── apiGuard.ts                # Server-side rate limit + same-origin guard
+│   ├── apiGuard.ts                # Same-origin guard + rate limit (Upstash Redis, in-memory fallback)
 │   ├── speechRecognition.ts       # Web Speech API wrapper (STT, silence finalize)
 │   ├── speechSynthesis.ts         # SpeechSynthesis wrapper + voice picker (fallback TTS)
 │   ├── ttsAudio.ts                # TTS fetch chain + chunked PCM playback (still mode)
@@ -465,11 +566,9 @@ In rough order of impact:
    mobile.)
 4. **Persisted preferences.** Captions and hands-free are now persisted; volume,
    voice, mic mode, and avatar mode are still per-session — persist them too.
-5. **Distributed rate limiting.** The current limiter is in-memory per instance;
-   move to a shared store (Upstash/Redis) for multi-instance deploys.
-6. **Wake word** so the user doesn't have to click the mic (e.g. Picovoice
+5. **Wake word** so the user doesn't have to click the mic (e.g. Picovoice
    Porcupine in the browser).
-7. **Headless mode for ESP32 / Pi clients** — the backend routes are stateless
+6. **Headless mode for ESP32 / Pi clients** — the backend routes are stateless
    and ready for embedded clients that handle their own audio I/O.
 
 ---

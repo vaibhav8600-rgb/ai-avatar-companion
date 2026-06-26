@@ -24,7 +24,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Minting a session token is lightweight; legitimate reconnects (toggling
   // live mode, switching call/chat, reloads) can need several per minute, so
   // keep this comfortably high while still bounding abuse.
-  const blocked = guard(req, "simli-session", { limit: 40, windowMs: 60_000 });
+  const blocked = await guard(req, "simli-session", { limit: 40, windowMs: 60_000 });
   if (blocked) return blocked;
 
   const apiKey = process.env.SIMLI_API_KEY;
