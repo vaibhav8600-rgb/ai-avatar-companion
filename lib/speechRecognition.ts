@@ -45,7 +45,13 @@ export interface RecognitionHandlers {
   onPartial?: (text: string) => void;
   onFinal: (text: string) => void;
   onError?: (message: string) => void;
-  onEnd?: () => void;
+  /**
+   * Called when recognition ends. `finalized` is true if a transcript was
+   * submitted this session; false means the engine stopped on its own without
+   * capturing anything (e.g. a mobile silence cutoff) — the caller may choose
+   * to restart listening.
+   */
+  onEnd?: (info: { finalized: boolean }) => void;
 }
 
 export function isSpeechRecognitionSupported(): boolean {
@@ -129,7 +135,7 @@ export function createRecognizer(
     clearSilence();
     // Common non-fatal errors we silence; surface the rest.
     if (e.error === "no-speech" || e.error === "aborted") {
-      handlers.onEnd?.();
+      handlers.onEnd?.({ finalized });
       return;
     }
     handlers.onError?.(e.message || e.error || "Microphone error");
@@ -140,7 +146,7 @@ export function createRecognizer(
     // If the engine ended (manual stop / push-to-talk release / its own silence
     // cutoff) and we have unsent text, send it now.
     if (!finalized && latest.trim()) submit();
-    handlers.onEnd?.();
+    handlers.onEnd?.({ finalized });
   };
 
   return recognition;

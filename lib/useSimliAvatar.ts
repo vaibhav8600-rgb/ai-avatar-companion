@@ -147,6 +147,40 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     [],
   );
 
+  /**
+   * Speak a sequence of text chunks, prefetching each chunk's TTS while the
+   * previous one streams — so her lips start moving after the first sentence
+   * instead of after the whole reply is synthesized. Throws if the FIRST chunk
+   * fails (caller falls back to the browser voice); later failures are skipped.
+   */
+  const speakChunks = useCallback(
+    async (chunks: string[], model?: string, voice?: string): Promise<void> => {
+      const client = clientRef.current;
+      if (!client) throw new Error("Avatar not connected");
+      if (chunks.length === 0) return;
+
+      let nextFetch = fetchTtsAudio(chunks[0], model, voice);
+      for (let i = 0; i < chunks.length; i++) {
+        let audio;
+        try {
+          audio = await nextFetch;
+        } catch (err) {
+          if (i === 0) throw err;
+          break;
+        }
+        if (i + 1 < chunks.length) {
+          nextFetch = fetchTtsAudio(chunks[i + 1], model, voice);
+          nextFetch.catch(() => {});
+        }
+        const pcm = await decodeToSimliPcm(audio.audioBase64, audio.sampleRate || 24000, 16000);
+        for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+          client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+        }
+      }
+    },
+    [],
+  );
+
   /** Stop the avatar mid-sentence (used when the user starts talking). */
   const clear = useCallback(() => {
     clientRef.current?.ClearBuffer();
@@ -169,5 +203,5 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     };
   }, []);
 
-  return { videoRef, audioRef, status, ensureConnected, speak, clear, stop };
+  return { videoRef, audioRef, status, ensureConnected, speak, speakChunks, clear, stop };
 }

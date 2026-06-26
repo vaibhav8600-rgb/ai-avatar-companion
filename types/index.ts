@@ -58,6 +58,17 @@ export interface VisionResult {
   textVisible: string;
   safetyNotes: string;
   confidence: number;
+  /**
+   * When recognizing against candidate memories (their thumbnails are sent to
+   * the model), the label of the matched memory, or "" / "none" if no match.
+   */
+  matchedLabel?: string;
+}
+
+/** A candidate memory (label + thumbnail) sent to the vision model to compare. */
+export interface VisionCandidate {
+  label: string;
+  imageBase64: string;
 }
 
 export type VisualMemoryType = "object" | "person" | "place" | "note";

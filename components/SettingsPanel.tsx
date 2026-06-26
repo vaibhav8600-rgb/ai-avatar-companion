@@ -17,6 +17,12 @@ interface SettingsPanelProps {
   onVoiceChange: (name: string) => void;
   pushToTalk: boolean;
   onPushToTalkChange: (v: boolean) => void;
+  /** Hands-free: keep the mic open across pauses and auto-listen after replies. */
+  handsFree: boolean;
+  onHandsFreeChange: (v: boolean) => void;
+  /** Show Mira's spoken reply as on-screen captions. */
+  captionsEnabled: boolean;
+  onCaptionsChange: (v: boolean) => void;
   /** Whether the live video avatar is configured/available on the server. */
   liveAvatarSupported: boolean;
   liveAvatarEnabled: boolean;
@@ -52,6 +58,10 @@ export default function SettingsPanel({
   onVoiceChange,
   pushToTalk,
   onPushToTalkChange,
+  handsFree,
+  onHandsFreeChange,
+  captionsEnabled,
+  onCaptionsChange,
   liveAvatarSupported,
   liveAvatarEnabled,
   onLiveAvatarChange,
@@ -227,6 +237,21 @@ export default function SettingsPanel({
               />
             </div>
           </Field>
+
+          <div className="space-y-3">
+            <ToggleRow
+              label="Hands-free conversation"
+              hint="Keep listening across pauses and re-open the mic after each reply"
+              checked={handsFree}
+              onChange={onHandsFreeChange}
+            />
+            <ToggleRow
+              label="Captions"
+              hint="Show Mira's spoken reply as on-screen text"
+              checked={captionsEnabled}
+              onChange={onCaptionsChange}
+            />
+          </div>
 
           <div className="space-y-3">
             <span className="text-[10px] uppercase tracking-[0.18em] text-cream-100/50">
