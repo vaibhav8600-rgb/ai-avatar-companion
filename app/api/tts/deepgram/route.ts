@@ -6,6 +6,7 @@
 // falls back to Gemini TTS (/api/tts), then to the browser's Web Speech voice.
 
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,9 @@ interface DeepgramBody {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const blocked = guard(req, "tts-deepgram", { limit: 90, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "DEEPGRAM_API_KEY not set" }, { status: 400 });

@@ -16,6 +16,7 @@ import {
   analyzeImage,
   makeThumbnail,
   buildRecognitionPrompt,
+  buildCandidates,
   matchMemory,
 } from "@/lib/visionClient";
 import {
@@ -43,11 +44,12 @@ import {
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
 import {
-  playServerTts,
+  playServerTtsChunks,
   stopServerTts,
   primeTtsAudio,
   isTtsAudioSupported,
 } from "@/lib/ttsAudio";
+import { splitIntoSpeechChunks } from "@/lib/textChunks";
 import {
   loadMemory,
   saveMemory,
@@ -65,6 +67,10 @@ import {
   saveLiveVision,
   loadAutoCaptureVision,
   saveAutoCaptureVision,
+  loadCaptions,
+  saveCaptions,
+  loadHandsFree,
+  saveHandsFree,
   loadPreferredCamera,
 } from "@/lib/memoryManager";
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
@@ -99,6 +105,14 @@ export default function Page() {
   const [ttsModel, setTtsModel] = useState("");
   // User-selected Gemini voice persona ("" = server default).
   const [geminiVoice, setGeminiVoice] = useState("");
+  // Show Mira's spoken reply as on-screen captions (accessibility).
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [caption, setCaption] = useState("");
+  // Hands-free: keep listening across pauses / auto-listen after a reply.
+  const [handsFree, setHandsFree] = useState(false);
+  // Network + retry state.
+  const [isOnline, setIsOnline] = useState(true);
+  const [canRetry, setCanRetry] = useState(false);
 
   // ----- Mira Vision -----
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -131,12 +145,33 @@ export default function Page() {
   const recognizerRef = useRef<ReturnType<typeof createRecognizer> | null>(null);
   const wasManualStopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  // True once the live avatar has actually started speaking this turn (watchdog).
+  const spokeRef = useRef(false);
+  // Closure-safe mirror of avatarState for timers/watchdogs.
+  const avatarStateRef = useRef<AvatarState>("idle");
+  // Stable handle so onEnd can re-arm listening without a dependency cycle.
+  const startListeningRef = useRef<() => void>(() => {});
+  // Consecutive empty auto-restarts (mobile cutoff guard) — capped.
+  const autoRestartCountRef = useRef(0);
+  // Last user turn + whether it spoke, for the Retry affordance.
+  const retryTextRef = useRef("");
+  const lastSpeakRef = useRef(true);
+  // Live, closure-safe view of hands-free mode.
+  const handsFreeRef = useRef(false);
+  useEffect(() => {
+    handsFreeRef.current = handsFree;
+  }, [handsFree]);
+
+  const MAX_AUTO_RESTART = 3;
 
   // ----- live video avatar (Simli) -----
   // Speaking/idle state is driven by the avatar's own audio events. Falls back
   // to the static image + browser speech when Simli isn't configured.
   const liveAvatar = useSimliAvatar({
-    onSpeaking: () => setAvatarState("speaking"),
+    onSpeaking: () => {
+      spokeRef.current = true; // watchdog: she actually started talking
+      setAvatarState("speaking");
+    },
     // Only a real end-of-speech returns us to idle. We must NOT reset from
     // "thinking" here: clear()/barge-in emits an async "silent" that can land
     // during the next turn's "thinking" and would otherwise flicker the label.
@@ -169,6 +204,22 @@ export default function Page() {
     [voiceName, volume],
   );
 
+  // Keep a closure-safe mirror of the avatar state for timers/watchdogs, and
+  // drive hands-free: when she finishes speaking, re-open the mic automatically.
+  useEffect(() => {
+    const prev = avatarStateRef.current;
+    avatarStateRef.current = avatarState;
+    if (
+      handsFreeRef.current &&
+      prev === "speaking" &&
+      avatarState === "idle" &&
+      !cameraOpen
+    ) {
+      autoRestartCountRef.current = 0;
+      startListeningRef.current();
+    }
+  }, [avatarState, cameraOpen]);
+
   // ----- restore persistence on mount -----
   useEffect(() => {
     setMemory(loadMemory());
@@ -178,6 +229,21 @@ export default function Page() {
     setKnownPersonRecognition(loadKnownPersonRecognition());
     setLiveVisionEnabled(loadLiveVision());
     setAutoCaptureVision(loadAutoCaptureVision());
+    setCaptionsEnabled(loadCaptions());
+    setHandsFree(loadHandsFree());
+  }, []);
+
+  // Track online/offline so we can warn instead of failing silently.
+  useEffect(() => {
+    if (typeof navigator !== "undefined") setIsOnline(navigator.onLine);
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
   }, []);
 
   useEffect(() => {
@@ -220,6 +286,14 @@ export default function Page() {
   }, [geminiVoice]);
 
   useEffect(() => {
+    saveCaptions(captionsEnabled);
+  }, [captionsEnabled]);
+
+  useEffect(() => {
+    saveHandsFree(handsFree);
+  }, [handsFree]);
+
+  useEffect(() => {
     saveMemory(memory);
   }, [memory]);
 
@@ -227,12 +301,13 @@ export default function Page() {
     saveHistory(messages);
   }, [messages]);
 
-  // Reset error after a short delay so the UI doesn't stay stuck on error
+  // Reset error after a short delay so the UI doesn't stay stuck on error.
+  // Retriable errors stay until the user acts (so the Retry button remains).
   useEffect(() => {
-    if (avatarState !== "error") return;
+    if (avatarState !== "error" || canRetry) return;
     const t = setTimeout(() => setAvatarState("idle"), 3500);
     return () => clearTimeout(t);
-  }, [avatarState]);
+  }, [avatarState, canRetry]);
 
   // Connect the live avatar early (so her idle face is already streaming by the
   // time she first speaks) — or tear the stream down when switched to image
@@ -263,29 +338,45 @@ export default function Page() {
   const voiceReply = useCallback(
     async (text: string) => {
       interruptSpeech();
+      // Caption the reply (shown when captions are enabled).
+      setCaption(text);
+      // Sentence chunks so playback can start after the first sentence.
+      const chunks = splitIntoSpeechChunks(text);
+
       const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
       if (live) {
         // Stay in "thinking" through TTS generation/buffering — Simli emits its
         // own "speaking" event when audio actually starts (wired in the hook).
+        spokeRef.current = false;
         try {
-          await liveAvatar.speak(text, ttsModel, geminiVoice);
+          await liveAvatar.speakChunks(chunks, ttsModel, geminiVoice);
         } catch {
           liveAvatar.clear();
           speakWithBrowser(text);
+          return;
         }
+        // Watchdog: if Simli accepted the audio but never signaled "speaking"
+        // (lost event / stalled stream), don't leave the UI stuck on Thinking —
+        // recover to the browser voice so she still responds.
+        setTimeout(() => {
+          if (!spokeRef.current && avatarStateRef.current === "thinking") {
+            liveAvatar.clear();
+            speakWithBrowser(text);
+          }
+        }, 5000);
         return;
       }
 
-      // Still mode: keep "thinking" while the TTS is fetched; flip to "speaking"
-      // only when audio actually begins (onPlay).
+      // Still mode: keep "thinking" while the first chunk is fetched; flip to
+      // "speaking" only when audio actually begins (onFirstPlay).
       if (isTtsAudioSupported()) {
         try {
-          await playServerTts({
-            text,
+          await playServerTtsChunks({
+            chunks,
             model: ttsModel,
             voice: geminiVoice,
             volume,
-            onPlay: () => setAvatarState("speaking"),
+            onFirstPlay: () => setAvatarState("speaking"),
           });
           // Only settle to idle if we're still the speaking turn (a new mic
           // press / vision command may have moved us on).
@@ -297,7 +388,7 @@ export default function Page() {
       }
       speakWithBrowser(text);
     },
-    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speak, liveAvatar.clear, speakWithBrowser],
+    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speakChunks, liveAvatar.clear, speakWithBrowser],
   );
 
   /** Add an assistant message and speak it. */
@@ -348,7 +439,7 @@ export default function Page() {
     try {
       const memories = await listMemories();
       const prompt = buildRecognitionPrompt(memories, "object");
-      const result = await analyzeImage(frame, "recognition", prompt);
+      const result = await analyzeImage(frame, "recognition", prompt, buildCandidates(memories, "object"));
       pendingVisionContextRef.current = result.description;
       const match = matchMemory(result, memories, "object");
       if (match && match.confidence >= 0.6) {
@@ -523,7 +614,7 @@ export default function Page() {
           setVisionBusy(true);
           try {
             const memories = await listMemories();
-            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "object"));
+            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "object"), buildCandidates(memories, "object"));
             pendingVisionContextRef.current = result.description;
             const match = matchMemory(result, memories, "object");
             if (match && match.confidence >= 0.6) {
@@ -584,7 +675,7 @@ export default function Page() {
           setVisionBusy(true);
           try {
             const memories = await listMemories();
-            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "person"));
+            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "person"), buildCandidates(memories, "person"));
             pendingVisionContextRef.current = result.description;
             if (result.peopleCount < 1) {
               setAvatarState("idle");
@@ -632,19 +723,29 @@ export default function Page() {
   // `speak` is true for the voice call and false for the text chat, which is
   // a quiet, text-only conversation over the same history.
   const sendUserMessage = useCallback(
-    async (text: string, opts?: { speak?: boolean }) => {
+    async (text: string, opts?: { speak?: boolean; retry?: boolean }) => {
       const shouldSpeak = opts?.speak ?? true;
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: new Date().toISOString(),
-      };
-      const nextMessages = [...messages, userMsg];
-      setMessages(nextMessages);
+      // Remember this turn for the Retry affordance, and clear any prior error.
+      retryTextRef.current = trimmed;
+      lastSpeakRef.current = shouldSpeak;
+      setCanRetry(false);
+
+      // On retry the failed user message is still the last entry; don't re-add it.
+      const nextMessages = opts?.retry
+        ? messages
+        : [
+            ...messages,
+            {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: trimmed,
+              timestamp: new Date().toISOString(),
+            } as ChatMessage,
+          ];
+      if (!opts?.retry) setMessages(nextMessages);
       setInterimText("");
 
       // Live Vision Conversation: when the camera is active and live vision +
@@ -668,7 +769,8 @@ export default function Page() {
       try {
         const response = await sendChat(
           {
-            messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+            // Send only the recent window; the server also bounds this.
+            messages: nextMessages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
             memory,
             visionContext,
           },
@@ -694,8 +796,14 @@ export default function Page() {
         await voiceReply(reply);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        const msg = err instanceof Error ? err.message : "Connection failed";
+        const offline = typeof navigator !== "undefined" && !navigator.onLine;
+        const msg = offline
+          ? "You're offline. Reconnect and try again."
+          : err instanceof Error
+          ? err.message
+          : "Connection failed";
         setErrorMessage(msg);
+        setCanRetry(true); // offer a Retry button
         setAvatarState("error");
       }
     },
@@ -716,9 +824,13 @@ export default function Page() {
     wasManualStopRef.current = false;
     const recognizer = createRecognizer(
       {
-        onPartial: (t) => setInterimText(t),
+        onPartial: (t) => {
+          setInterimText(t);
+          autoRestartCountRef.current = 0; // real speech — reset the cutoff guard
+        },
         onFinal: (t) => {
           setInterimText("");
+          autoRestartCountRef.current = 0;
           // Push to send. The onend handler will then move out of listening.
           void sendUserMessage(t);
         },
@@ -730,8 +842,26 @@ export default function Page() {
           }
           setAvatarState("error");
         },
-        onEnd: () => {
-          // If still in listening (no final text triggered a state change), return to idle.
+        onEnd: ({ finalized }) => {
+          // The engine ended. If it stopped on its own without capturing anything
+          // (a mobile silence cutoff) while we still meant to listen, quietly
+          // re-arm the mic so the user isn't dropped mid-thought. Capped to avoid
+          // an endless restart loop when there's simply no speech.
+          const canReArm =
+            !finalized &&
+            !wasManualStopRef.current &&
+            !pushToTalk &&
+            autoRestartCountRef.current < MAX_AUTO_RESTART;
+          if (canReArm && avatarStateRef.current === "listening") {
+            autoRestartCountRef.current++;
+            setTimeout(() => {
+              if (!wasManualStopRef.current && avatarStateRef.current === "listening") {
+                startListeningRef.current();
+              }
+            }, 300);
+            return;
+          }
+          // Otherwise settle back to idle (if nothing else moved us on).
           setAvatarState((s) => (s === "listening" ? "idle" : s));
         },
       },
@@ -754,6 +884,11 @@ export default function Page() {
     }
   }, [sendUserMessage, interruptSpeech, pushToTalk]);
 
+  // Keep a stable handle for onEnd / hands-free to re-arm listening.
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
+
   const stopListening = useCallback(() => {
     wasManualStopRef.current = true;
     try {
@@ -768,6 +903,7 @@ export default function Page() {
     // later (after the async AI call, which is outside any gesture).
     primeSpeechSynthesis();
     primeTtsAudio();
+    autoRestartCountRef.current = 0; // fresh manual turn
     if (pushToTalk) {
       startListening();
     } else {
@@ -809,6 +945,17 @@ export default function Page() {
     interruptSpeech();
     setAvatarState("idle");
   }, [interruptSpeech]);
+
+  // ----- retry the last failed turn -----
+  const handleRetry = useCallback(() => {
+    const text = retryTextRef.current;
+    if (!text) return;
+    setCanRetry(false);
+    setErrorMessage(null);
+    setAvatarState("idle");
+    // The failed user message is still in the transcript; don't duplicate it.
+    void sendUserMessage(text, { speak: lastSpeakRef.current, retry: true });
+  }, [sendUserMessage]);
 
   // ----- reset -----
   const handleReset = useCallback(() => {
@@ -863,6 +1010,13 @@ export default function Page() {
   return (
     <ErrorBoundary>
       <main className="relative min-h-dvh flex flex-col">
+        {/* Offline banner */}
+        {!isOnline && (
+          <div className="relative z-20 bg-amber-500/15 border-b border-amber-500/30 px-4 py-1.5 text-center text-[11px] text-amber-200/90">
+            You&apos;re offline — Mira needs a connection to think and speak.
+          </div>
+        )}
+
         {/* Top bar */}
         <header className="relative z-10 flex items-center justify-between px-6 sm:px-10 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
           <div className="flex items-center gap-3">
@@ -929,10 +1083,26 @@ export default function Page() {
             <StatusIndicator state={avatarState} assistantName={assistantDisplayName} />
           </div>
 
-          {errorMessage && avatarState === "error" && (
-            <p className="mt-4 max-w-md text-center text-sm text-red-300/80 animate-fade-up">
-              {errorMessage}
+          {/* Captions — Mira's spoken reply as on-screen text. */}
+          {captionsEnabled && caption && avatarState === "speaking" && (
+            <p className="mt-4 max-w-md text-center text-sm text-cream-100/75 leading-relaxed animate-fade-up">
+              {caption}
             </p>
+          )}
+
+          {errorMessage && avatarState === "error" && (
+            <div className="mt-4 flex flex-col items-center gap-2 animate-fade-up">
+              <p className="max-w-md text-center text-sm text-red-300/80">{errorMessage}</p>
+              {canRetry && (
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  className="px-4 py-1.5 rounded-full text-xs uppercase tracking-wider bg-signal-500/20 border border-signal-500/50 text-signal-400 hover:bg-signal-500/30"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
           )}
         </section>
 
@@ -1068,6 +1238,10 @@ export default function Page() {
           onVoiceChange={setVoiceName}
           pushToTalk={pushToTalk}
           onPushToTalkChange={setPushToTalk}
+          handsFree={handsFree}
+          onHandsFreeChange={setHandsFree}
+          captionsEnabled={captionsEnabled}
+          onCaptionsChange={setCaptionsEnabled}
           liveAvatarSupported={liveAvatarSupported}
           liveAvatarEnabled={liveAvatarEnabled}
           onLiveAvatarChange={setLiveAvatarEnabled}

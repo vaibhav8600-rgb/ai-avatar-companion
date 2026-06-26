@@ -10,8 +10,16 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import type { ChatRequest, ChatResponse, UserMemory } from "@/types";
+import { guard } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
+
+// Keep the model context bounded so cost + latency don't grow unbounded over a
+// long session. We send the most recent turns only; older history is dropped.
+const MAX_CONTEXT_MESSAGES = 20;
+// Reject obviously abusive payloads early.
+const MAX_MESSAGES = 200;
+const MAX_TOTAL_CHARS = 60_000;
 
 // ----- system prompt -----
 
@@ -179,6 +187,9 @@ function mockReply(lastUser: string, assistantName: string): string {
 // ----- handler -----
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const blocked = guard(req, "chat", { limit: 30, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   let body: ChatRequest;
   try {
     body = (await req.json()) as ChatRequest;
@@ -189,6 +200,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
+  if (body.messages.length > MAX_MESSAGES) {
+    return NextResponse.json({ error: "Too many messages." }, { status: 413 });
+  }
+  const totalChars = body.messages.reduce((n, m) => n + (m.content?.length || 0), 0);
+  if (totalChars > MAX_TOTAL_CHARS) {
+    return NextResponse.json({ error: "Conversation payload too large." }, { status: 413 });
+  }
+
+  // Window to the most recent turns so the model context stays bounded.
+  const windowed = body.messages.slice(-MAX_CONTEXT_MESSAGES);
 
   const assistantName = process.env.ASSISTANT_NAME || "Mira";
   const persona = process.env.ASSISTANT_PERSONA || "warm, intelligent, professional, gently playful";
@@ -204,26 +225,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let usedProvider: ChatResponse["provider"] = "mock";
 
     if (provider === "anthropic" && hasAnthropic) {
-      reply = await callAnthropic(body.messages, system);
+      reply = await callAnthropic(windowed, system);
       usedProvider = "anthropic";
     } else if (provider === "openai" && hasOpenAI) {
-      reply = await callOpenAI(body.messages, system);
+      reply = await callOpenAI(windowed, system);
       usedProvider = "openai";
     } else if (provider === "google" && hasGoogle) {
-      reply = await callGoogleAI(body.messages, system);
+      reply = await callGoogleAI(windowed, system);
       usedProvider = "google";
     } else if (hasAnthropic) {
-      reply = await callAnthropic(body.messages, system);
+      reply = await callAnthropic(windowed, system);
       usedProvider = "anthropic";
     } else if (hasOpenAI) {
-      reply = await callOpenAI(body.messages, system);
+      reply = await callOpenAI(windowed, system);
       usedProvider = "openai";
     } else if (hasGoogle) {
-      reply = await callGoogleAI(body.messages, system);
+      reply = await callGoogleAI(windowed, system);
       usedProvider = "google";
     } else {
       // No keys configured — return a clear mock reply so the UX still works.
-      const lastUser = [...body.messages].reverse().find((m) => m.role === "user")?.content || "";
+      const lastUser = [...windowed].reverse().find((m) => m.role === "user")?.content || "";
       reply = mockReply(lastUser, assistantName);
       usedProvider = "mock";
     }

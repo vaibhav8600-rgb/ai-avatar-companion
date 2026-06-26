@@ -147,11 +147,19 @@ function saveBool(key: string, value: boolean): void {
 
 const LIVE_VISION_KEY = "aac:liveVision:v1";
 const AUTO_CAPTURE_KEY = "aac:autoCaptureVision:v1";
+const CAPTIONS_KEY = "aac:captions:v1";
+const HANDS_FREE_KEY = "aac:handsFree:v1";
 
 export const loadLiveVision = () => loadBool(LIVE_VISION_KEY, true);
 export const saveLiveVision = (v: boolean) => saveBool(LIVE_VISION_KEY, v);
 export const loadAutoCaptureVision = () => loadBool(AUTO_CAPTURE_KEY, true);
 export const saveAutoCaptureVision = (v: boolean) => saveBool(AUTO_CAPTURE_KEY, v);
+// Captions: show Mira's spoken reply as on-screen text. Off by default.
+export const loadCaptions = () => loadBool(CAPTIONS_KEY, false);
+export const saveCaptions = (v: boolean) => saveBool(CAPTIONS_KEY, v);
+// Hands-free: keep the mic alive across pauses and auto-listen after replies.
+export const loadHandsFree = () => loadBool(HANDS_FREE_KEY, false);
+export const saveHandsFree = (v: boolean) => saveBool(HANDS_FREE_KEY, v);
 
 // Preferred camera (front "user" / back "environment"), remembered across sessions.
 const PREF_CAMERA_KEY = "mira_preferred_camera";

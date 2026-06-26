@@ -56,14 +56,21 @@ microphone permission, and speak.
 | Conversation | Three AI providers — Anthropic Claude, OpenAI, Google Gemini | ✅ |
 | Conversation | Secure server-side proxy (`/api/chat`) — keys never reach the browser | ✅ |
 | Conversation | Per-session history + `localStorage` memory (name, preferences, notes) | ✅ |
+| Conversation | Bounded context window (recent turns only) — caps cost & latency | ✅ |
+| Security | Rate limiting + same-origin guard on every API route | ✅ |
 | Input | Push-to-talk + click-to-toggle mic (Web Speech STT) | ✅ |
+| Input | **Hands-free mode** — keeps listening across pauses, re-opens mic after replies | ✅ |
 | Input | Text input fallback when mic is denied or unsupported | ✅ |
 | Avatar | **Live, lip-synced video avatar** via Simli (real-time WebRTC) | ✅ |
 | Avatar | Gemini text-to-speech drives the avatar's lips | ✅ |
 | Avatar | Graceful fallback to still image + browser `SpeechSynthesis` | ✅ |
 | Avatar | Toggle live video ↔ still image in Settings | ✅ |
 | Avatar | State-driven aura (idle / listening / thinking / speaking / error) | ✅ |
+| Avatar | Watchdog recovery — never gets stuck on "Thinking" if the stream stalls | ✅ |
+| Voice | **Sentence-chunked TTS** — starts speaking after the first part of long replies | ✅ |
 | UX | Barge-in: start talking and she stops mid-sentence | ✅ |
+| UX | **Captions** — show her spoken reply as on-screen text (accessibility) | ✅ |
+| UX | Offline banner + one-tap **Retry** on a failed turn | ✅ |
 | UX | Settings panel, collapsible transcript, error handling | ✅ |
 | Chat | WhatsApp-style text chat (bubbles, timestamps, typing indicator) | ✅ |
 | Chat | Shares the same history as the call; text-only (no voice) | ✅ |
@@ -73,6 +80,7 @@ microphone permission, and speak.
 | Vision | Opt-in known-person enrollment (consent-gated); strangers never identified | ✅ |
 | Vision | Local visual memory (IndexedDB), managed in Settings | ✅ |
 | Vision | **Live Vision Conversation** — voice-first; auto-captures only when asked | ✅ |
+| Vision | Image-to-image recognition — saved thumbnails are compared directly | ✅ |
 
 ---
 
@@ -168,10 +176,36 @@ Deepgram's voice is set with `DEEPGRAM_TTS_MODEL` (default `aura-2-luna-en`);
 the "Avatar voice model" / "Avatar voice" pickers in Settings apply to the
 Gemini tier.
 
+**Sentence-chunked playback:** long replies are split into sentence chunks and
+the next chunk's audio is prefetched while the current one plays, so she starts
+talking after the first part instead of waiting for the whole reply to
+synthesize. Short/medium replies stay a single request (no added overhead).
+
 > **Cost note:** Gemini TTS bills per character and Simli bills per minute of
 > streaming, so each spoken reply costs a little in **both** modes now. If you
 > prefer the free browser voice, leave `GOOGLE_API_KEY` unset (or it'll be used
 > for TTS). Text **chat** mode stays silent and free.
+
+### Abuse & cost protection
+
+Every API route is guarded so a public deployment can't be trivially used to
+burn your paid quota ([lib/apiGuard.ts](lib/apiGuard.ts)):
+
+- **Same-origin check** — requests from other origins are rejected (`403`). Set
+  `API_SHARED_SECRET` and send it as an `x-api-secret` header to allow a trusted
+  programmatic caller through.
+- **Per-IP rate limit** — a sliding window per route (`429` with `Retry-After`
+  when exceeded). Limits are tuned per route (chat/vision lower, TTS higher
+  since chunked replies make several calls).
+- **Payload caps** — `/api/chat` bounds message count/size and only the recent
+  window of turns is sent to the model.
+
+> The limiter is **in-memory (per instance)** — fine for a single-region deploy.
+> For multi-instance scaling, swap it for a shared store (e.g. Upstash/Redis);
+> the `guard()` interface stays the same.
+>
+> **Rotate any keys** that have been shared in plaintext — they're treated as
+> compromised.
 
 ---
 
@@ -195,7 +229,7 @@ ai-avatar-companion/
 │   ├── StatusIndicator.tsx        # Status pill: Ready / Listening / Speaking…
 │   ├── MicButton.tsx              # Mic UI (push-to-talk or click-to-talk)
 │   ├── ChatTranscript.tsx         # Collapsible right-side transcript
-│   ├── SettingsPanel.tsx          # Name, volume, voice, avatar mode, mic mode, vision, reset
+│   ├── SettingsPanel.tsx          # Name, volume, voice, avatar/mic mode, hands-free, captions, vision, reset
 │   ├── CameraPanel.tsx            # Mira Vision camera UI (Look / Teach / Close)
 │   ├── VisionMemoryPanel.tsx      # Manage learned objects/people (Settings)
 │   ├── PermissionSetup.tsx        # First-run camera+mic permission onboarding
@@ -203,12 +237,15 @@ ai-avatar-companion/
 │   └── ErrorBoundary.tsx
 ├── lib/
 │   ├── apiClient.ts               # Frontend → /api/chat
-│   ├── speechRecognition.ts       # Web Speech API wrapper (STT)
+│   ├── apiGuard.ts                # Server-side rate limit + same-origin guard
+│   ├── speechRecognition.ts       # Web Speech API wrapper (STT, silence finalize)
 │   ├── speechSynthesis.ts         # SpeechSynthesis wrapper + voice picker (fallback TTS)
+│   ├── ttsAudio.ts                # TTS fetch chain + chunked PCM playback (still mode)
+│   ├── textChunks.ts              # Splits a reply into prefetchable sentence chunks
 │   ├── audio.ts                   # Base64 PCM decode + resample to 16kHz for Simli
-│   ├── useSimliAvatar.ts          # Live avatar lifecycle hook (connect/speak/clear/stop)
+│   ├── useSimliAvatar.ts          # Live avatar lifecycle hook (connect/speakChunks/clear/stop)
 │   ├── useCamera.ts               # getUserMedia camera hook + frame capture
-│   ├── visionClient.ts            # Vision analyze fetch + thumbnail + matching
+│   ├── visionClient.ts            # Vision analyze fetch + thumbnail candidates + matching
 │   ├── visionIntentRouter.ts      # Classifies a turn into a vision intent
 │   ├── permissionManager.ts       # Centralized camera+mic permission flow
 │   ├── visualMemory.ts            # IndexedDB visual-memory store (CRUD + export/import)
@@ -236,6 +273,9 @@ ai-avatar-companion/
 | Type instead of speaking | Text chat, or the quick text input below the mic |
 | Show transcript | "Show" button next to the mic, or expand from the right edge |
 | Switch live video ↔ still image | Gear icon → **Avatar** (only shown when Simli is configured) |
+| Hands-free conversation | Settings → **Hands-free** — mic stays open across pauses and re-opens after each reply |
+| Show captions | Settings → **Captions** — her spoken reply appears on screen |
+| Retry a failed turn | "Retry" button under the avatar after a connection error |
 | Change name / voice / volume / mic mode | Gear icon top right |
 | Reset everything | Settings → "Reset conversation & memory" |
 
@@ -318,13 +358,15 @@ Toggles in **Settings → Mira Vision**: *Live Vision conversation*,
 *Auto-capture for vision questions*, *Known-person recognition* (off by
 default), and *Ask before saving a person* (always on).
 
-### How matching works (MVP)
+### How matching works
 
-The current version is intentionally simple: the vision model compares the live
-frame against your saved memories' labels/descriptions, and Mira matches by
-label/keyword weighted by the model's confidence. If unsure, she says so rather
-than guessing. A future improvement is multimodal embeddings for more robust
-matching.
+When you ask Mira to recognize something, the saved **thumbnails** of your
+candidate memories are sent alongside the live frame, so the vision model
+compares **image to image** and returns the matching label directly — far more
+reliable than text-only matching. Mira prefers that signal and falls back to a
+label/keyword heuristic (weighted by the model's confidence) if no direct match
+is reported. If unsure, she says so rather than guessing. A future improvement is
+multimodal embeddings for even more robust matching.
 
 ### Privacy & safety
 
@@ -410,19 +452,24 @@ Tuned to feel native on phones (verified against iPhone SE and iPhone 13 sizes):
 
 In rough order of impact:
 
-1. **Streaming responses.** Switch `/api/chat` to a streaming endpoint and start
-   TTS on the first complete sentence — cuts perceived latency significantly.
+1. **Streaming chat responses.** TTS already starts on the first sentence of a
+   long reply (sentence-chunked playback); the remaining win is streaming
+   `/api/chat` itself so chunking can begin before the full reply is generated.
 2. **Premium / configurable TTS.** ElevenLabs or Cartesia return native
    `pcm_16000` (no resampling, lower latency) and more lifelike prosody. The
    `.env` already has ElevenLabs placeholders; `/api/tts` is the only route that
    would change.
 3. **Server-side STT** for accuracy and Firefox support — Deepgram or
-   AssemblyAI streaming, replacing the Web Speech API.
-4. **Persisted preferences.** Volume, voice, mic mode, and avatar mode are
-   currently per-session; persist them alongside memory in `localStorage`.
-5. **Wake word** so the user doesn't have to click the mic (e.g. Picovoice
+   AssemblyAI streaming, replacing the Web Speech API. (Hands-free mode already
+   keeps the mic alive across pauses; server STT would make it fully reliable on
+   mobile.)
+4. **Persisted preferences.** Captions and hands-free are now persisted; volume,
+   voice, mic mode, and avatar mode are still per-session — persist them too.
+5. **Distributed rate limiting.** The current limiter is in-memory per instance;
+   move to a shared store (Upstash/Redis) for multi-instance deploys.
+6. **Wake word** so the user doesn't have to click the mic (e.g. Picovoice
    Porcupine in the browser).
-6. **Headless mode for ESP32 / Pi clients** — the backend routes are stateless
+7. **Headless mode for ESP32 / Pi clients** — the backend routes are stateless
    and ready for embedded clients that handle their own audio I/O.
 
 ---

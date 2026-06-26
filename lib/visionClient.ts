@@ -4,18 +4,19 @@
 // thumbnails for storage, and do lightweight matching of a fresh frame against
 // learned memories (MVP — no embeddings yet).
 
-import type { VisionMode, VisionResult, VisualMemory } from "@/types";
+import type { VisionCandidate, VisionMode, VisionResult, VisualMemory } from "@/types";
 
 /** Call the server vision route. Throws a friendly error on failure. */
 export async function analyzeImage(
   imageBase64: string,
   mode: VisionMode,
   prompt: string,
+  candidates?: VisionCandidate[],
 ): Promise<VisionResult> {
   const res = await fetch("/api/vision/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64, mode, prompt }),
+    body: JSON.stringify({ imageBase64, mode, prompt, candidates }),
   });
   if (!res.ok) {
     let msg = `Vision request failed (${res.status})`;
@@ -85,20 +86,49 @@ export function buildRecognitionPrompt(
   );
 }
 
+/**
+ * Build the candidate thumbnails (label + image) to send to the vision model so
+ * it can compare the current frame against saved memories directly. Capped to
+ * keep the request small; people use their primary thumbnail.
+ */
+export function buildCandidates(
+  memories: VisualMemory[],
+  type: "object" | "person",
+  max = 6,
+): VisionCandidate[] {
+  return memories
+    .filter((m) => m.type === type && m.thumbnailBase64)
+    .slice(0, max)
+    .map((m) => ({ label: m.label, imageBase64: m.thumbnailBase64 }));
+}
+
 export interface MemoryMatch {
   memory: VisualMemory;
   confidence: number;
 }
 
 /**
- * Lightweight match: find a saved memory whose label appears in the analysis,
- * weighted by the model's reported confidence. MVP heuristic, not embeddings.
+ * Resolve which saved memory the analysis matched. Prefers the model's direct
+ * image comparison (`matchedLabel`, set when candidate thumbnails were sent);
+ * falls back to the lightweight text-overlap heuristic otherwise.
  */
 export function matchMemory(
   result: VisionResult,
   memories: VisualMemory[],
   type: "object" | "person",
 ): MemoryMatch | null {
+  // Strong signal: the model compared images and named a matching label.
+  if (result.matchedLabel) {
+    const wanted = result.matchedLabel.toLowerCase();
+    const hit = memories.find(
+      (m) => m.type === type && m.label.toLowerCase() === wanted,
+    );
+    if (hit) {
+      // Floor the confidence so a direct visual match clears the 0.6 gate.
+      return { memory: hit, confidence: Math.max(result.confidence || 0.6, 0.7) };
+    }
+  }
+
   const haystack = (
     result.description +
     " " +

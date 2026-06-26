@@ -8,7 +8,7 @@
 //
 // Bump CACHE_VERSION to invalidate old caches on the next activation.
 
-const CACHE_VERSION = "aac-v1";
+const CACHE_VERSION = "aac-v2";
 const PRECACHE = [
   "/",
   "/manifest.webmanifest",

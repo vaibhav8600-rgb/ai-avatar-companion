@@ -24,7 +24,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // Allow pinch-zoom for accessibility (don't lock maximumScale to 1).
+  maximumScale: 5,
+  userScalable: true,
   // Let content extend into the notch / home-indicator areas so we can pad for
   // them explicitly with env(safe-area-inset-*).
   viewportFit: "cover",

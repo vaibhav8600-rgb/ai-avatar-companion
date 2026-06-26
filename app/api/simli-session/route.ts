@@ -8,7 +8,8 @@
 // If SIMLI_API_KEY / SIMLI_FACE_ID aren't configured, we report that cleanly
 // so the client can fall back to the static image avatar.
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
@@ -19,7 +20,13 @@ interface SimliSessionConfig {
   maxIdleTime: number;
 }
 
-export async function POST(): Promise<NextResponse> {
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  // Minting a session token is lightweight; legitimate reconnects (toggling
+  // live mode, switching call/chat, reloads) can need several per minute, so
+  // keep this comfortably high while still bounding abuse.
+  const blocked = guard(req, "simli-session", { limit: 40, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const apiKey = process.env.SIMLI_API_KEY;
   const faceId = process.env.SIMLI_FACE_ID;
 
