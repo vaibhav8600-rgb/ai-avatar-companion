@@ -139,6 +139,11 @@ reduced-motion-friendly shimmer (`.skeleton` in `globals.css`). Applied to:
   short) so nothing clips on an iPhone SE/13. The orb scales down to 228 px
   under 400 px width; the mic and controls have mobile sizes; Settings rows wrap
   instead of overflowing.
+- **Modals fit small viewports**: full-screen panels use `p-2 sm:p-4` backdrops
+  and `px-4 sm:px-6` interiors, wrap their toolbars, and give text fields
+  `min-w-0`. The Visual Memory panel in particular no longer overflows the
+  screen on an iPhone SE (verified: 0 px horizontal overflow, panel within the
+  viewport at 375 px / 390 px).
 - **Performance budget**: on phones (`max-width: 640px` / `pointer: coarse`) the
   expensive real-time `backdrop-filter` on `.glass` is replaced with a solid
   translucent fill; hidden waveform canvases skip painting; the starfield DPR is
@@ -173,7 +178,24 @@ downscale/read logic lives in one place.
 
 ---
 
-## 8. Notable bug fixes (during the transform)
+## 8. Conversation backup (export / import)
+
+Mirrors the visual-memory JSON export/import, exposed as a **Conversation
+Backup** row in Settings (Export / Import).
+
+- `exportConversation()` / `importConversation()` in
+  [`lib/memoryManager.ts`](../lib/memoryManager.ts) serialize the chat history +
+  user memory to a versioned JSON (`{ kind: "mira-conversation", version, … }`)
+  and parse it back. Import is **tolerant** — it accepts the wrapped shape or a
+  bare message array, validates each message, and throws on unusable input so a
+  malformed file can't corrupt the transcript.
+- Page handlers download the file (`mira-conversation-YYYY-MM-DD.json`) and, on
+  import, confirm before **replacing** the current conversation (and applying
+  the saved memory), persisted via the existing `saveHistory` effect.
+
+---
+
+## 9. Notable bug fixes (during the transform)
 
 - **Live-mode UI freeze.** Root cause: enabling Live Video makes the page
   re-render continuously (Simli status, keepalive, video events), which
@@ -194,7 +216,7 @@ downscale/read logic lives in one place.
 
 ---
 
-## 9. Tooling
+## 10. Tooling
 
 - **ESLint** is now actually installed and configured
   (`.eslintrc.json` → `next/core-web-vitals` + `prettier`). `next build` lints.
@@ -203,7 +225,7 @@ downscale/read logic lives in one place.
 - New runtime deps: `framer-motion`, `three`, `@react-three/fiber`,
   `@react-three/drei` (+ `@types/three`).
 
-## 10. Verifying changes
+## 11. Verifying changes
 
 `npm run build` is the source of truth (type-check + lint + build). There's no
 test framework; mic / mobile Web Speech / camera / Simli / PWA behaviors need

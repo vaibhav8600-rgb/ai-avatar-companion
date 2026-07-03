@@ -39,6 +39,10 @@ interface SettingsPanelProps {
   onAutoCaptureVisionChange: (v: boolean) => void;
   onResetPermissions: () => void;
   onResetConversation: () => void;
+  /** Download the conversation + memory as JSON. */
+  onExportConversation: () => void;
+  /** Restore a conversation from a JSON export file. */
+  onImportConversation: (file: File) => void;
 }
 
 /**
@@ -78,6 +82,8 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     onAutoCaptureVisionChange,
     onResetPermissions,
     onResetConversation,
+    onExportConversation,
+    onImportConversation,
   } = props;
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -85,6 +91,7 @@ export default function SettingsPanel(props: SettingsPanelProps) {
   const [avatarModeOpen, setAvatarModeOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const convFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -411,6 +418,40 @@ export default function SettingsPanel(props: SettingsPanelProps) {
                   )}
                 </AnimatePresence>
               </div>
+
+              <Row
+                icon={<BackupIcon />}
+                title="Conversation Backup"
+                subtitle="Export or restore chat as JSON"
+              >
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onExportConversation}
+                    className="rounded-full border border-white/10 px-3.5 py-2 text-sm font-medium text-ink-primary hover:bg-white/[0.06]"
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => convFileRef.current?.click()}
+                    className="rounded-full border border-white/10 px-3.5 py-2 text-sm font-medium text-ink-primary hover:bg-white/[0.06]"
+                  >
+                    Import
+                  </button>
+                  <input
+                    ref={convFileRef}
+                    type="file"
+                    accept="application/json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) onImportConversation(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
+              </Row>
 
               <Row
                 icon={<ResetIcon />}
@@ -762,6 +803,13 @@ function TrashIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" {...s}>
       <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  );
+}
+function BackupIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" {...s}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
     </svg>
   );
 }

@@ -79,6 +79,8 @@ import {
   loadHandsFree,
   saveHandsFree,
   loadPreferredCamera,
+  exportConversation,
+  importConversation,
 } from "@/lib/memoryManager";
 import type { AvatarState, ChatMessage, UserMemory } from "@/types";
 
@@ -1178,6 +1180,40 @@ export default function Page() {
     setErrorMessage(null);
   }, [interruptSpeech]);
 
+  // ----- conversation backup (export / import JSON) -----
+  const handleExportConversation = useCallback(() => {
+    const json = exportConversation();
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mira-conversation-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleImportConversation = useCallback(
+    async (file: File) => {
+      try {
+        const { messages: imported, memory: importedMemory } = importConversation(
+          await file.text(),
+        );
+        if (
+          !confirm(`Import ${imported.length} messages? This replaces the current conversation.`)
+        ) {
+          return;
+        }
+        interruptSpeech();
+        setMessages(imported); // effect persists it via saveHistory
+        if (importedMemory) setMemory(importedMemory);
+        setAvatarState("idle");
+      } catch (e) {
+        alert(e instanceof Error ? e.message : "Couldn't import that file.");
+      }
+    },
+    [interruptSpeech],
+  );
+
   // ----- text chat (WhatsApp-style, voice off) -----
   const handleChatSend = useCallback(
     (text: string, image?: string) => {
@@ -1654,6 +1690,8 @@ export default function Page() {
           setPermissionSetupOpen(true);
         }}
         onResetConversation={handleReset}
+        onExportConversation={handleExportConversation}
+        onImportConversation={handleImportConversation}
       />
 
       {/* PWA install experience (self-managed via beforeinstallprompt) */}

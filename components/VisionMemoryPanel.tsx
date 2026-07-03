@@ -113,7 +113,7 @@ export default function VisionMemoryPanel({
 
   return (
     <div
-      className="fixed inset-0 z-40 grid place-items-center bg-cosmic-base/70 p-4 backdrop-blur-sm animate-fade-up"
+      className="fixed inset-0 z-40 grid place-items-center bg-cosmic-base/70 p-2 backdrop-blur-sm animate-fade-up sm:p-4"
       onClick={onClose}
     >
       <div className="relative w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
@@ -123,10 +123,10 @@ export default function VisionMemoryPanel({
         />
         <div className="glass relative flex max-h-[92dvh] flex-col overflow-hidden rounded-panel">
           {/* Header */}
-          <header className="flex items-start justify-between gap-3 px-6 py-5">
-            <div>
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-bold text-ink-primary">Visual Memory</h2>
+          <header className="flex items-start justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h2 className="text-xl font-bold text-ink-primary sm:text-2xl">Visual Memory</h2>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-cyan/10 px-2.5 py-1 text-xs text-accent-cyan">
                   <span className="h-1.5 w-1.5 rounded-full bg-accent-cyan" /> Local-only memory
                 </span>
@@ -155,7 +155,7 @@ export default function VisionMemoryPanel({
           </header>
 
           {/* Toolbar */}
-          <div className="flex flex-wrap items-center gap-3 px-6">
+          <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6">
             <div className="flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-sm">
               {(["objects", "people"] as Tab[]).map((t) => (
                 <button
@@ -205,8 +205,8 @@ export default function VisionMemoryPanel({
           </div>
 
           {/* Search + sort + view */}
-          <div className="flex items-center gap-2 px-6 py-4">
-            <div className="glass flex flex-1 items-center gap-2 rounded-full px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-6 sm:py-4">
+            <div className="glass flex min-w-0 flex-1 basis-full items-center gap-2 rounded-full px-3 py-2 sm:basis-auto">
               <svg
                 width="15"
                 height="15"
@@ -316,7 +316,7 @@ export default function VisionMemoryPanel({
           )}
 
           {/* Grid / list */}
-          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-2">
+          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 pb-2">
             {loading ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -355,7 +355,7 @@ export default function VisionMemoryPanel({
           </div>
 
           {/* Bottom bar */}
-          <footer className="flex flex-col gap-3 border-t border-white/[0.06] px-6 py-4 sm:flex-row sm:items-center">
+          <footer className="flex flex-col gap-3 border-t border-white/[0.06] px-4 sm:px-6 py-4 sm:flex-row sm:items-center">
             <p className="flex-1 text-xs text-ink-muted">
               Memory is stored locally in your browser. Your data never leaves your device.
             </p>
