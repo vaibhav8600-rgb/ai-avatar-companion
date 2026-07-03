@@ -63,10 +63,10 @@ function instruction(mode: string, userPrompt: string, hasCandidates: boolean): 
     mode === "object"
       ? " Focus on the single main object: what it is, brand/material/notable details."
       : mode === "person"
-      ? " A person is being enrolled WITH consent; describe only generic appearance to help re-recognition, never an identity guess."
-      : mode === "recognition"
-      ? " Decide which saved memory (if any) the current view matches and how confident."
-      : " Describe the overall scene naturally and briefly.";
+        ? " A person is being enrolled WITH consent; describe only generic appearance to help re-recognition, never an identity guess."
+        : mode === "recognition"
+          ? " Decide which saved memory (if any) the current view matches and how confident."
+          : " Describe the overall scene naturally and briefly.";
 
   return `${base}${modeHint}${compareHint}\n\nUser request: ${userPrompt}`;
 }
@@ -91,17 +91,13 @@ function coerceResult(text: string): VisionResult {
         ? parsed.description
         : text.trim().slice(0, 600) || "I couldn't interpret the image.",
     objects: asArray(parsed.objects),
-    peopleCount:
-      typeof parsed.peopleCount === "number" ? parsed.peopleCount : 0,
+    peopleCount: typeof parsed.peopleCount === "number" ? parsed.peopleCount : 0,
     textVisible: typeof parsed.textVisible === "string" ? parsed.textVisible : "",
     safetyNotes: typeof parsed.safetyNotes === "string" ? parsed.safetyNotes : "",
     confidence:
-      typeof parsed.confidence === "number"
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : 0.5,
+      typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5,
     matchedLabel:
-      typeof parsed.matchedLabel === "string" &&
-      parsed.matchedLabel.toLowerCase() !== "none"
+      typeof parsed.matchedLabel === "string" && parsed.matchedLabel.toLowerCase() !== "none"
         ? parsed.matchedLabel.trim()
         : "",
   };
@@ -114,8 +110,7 @@ async function analyzeWithGemini(
   candidates: { label: string; mime: string; data: string }[],
 ): Promise<VisionResult> {
   const apiKey = process.env.GOOGLE_API_KEY!;
-  const model =
-    process.env.GEMINI_VISION_MODEL || process.env.GOOGLE_MODEL || "gemini-2.0-flash";
+  const model = process.env.GEMINI_VISION_MODEL || process.env.GOOGLE_MODEL || "gemini-2.0-flash";
   // First the current view, then each labeled reference thumbnail.
   const parts: Record<string, unknown>[] = [
     { text: sys },

@@ -1,7 +1,10 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { fileToAttachment } from "@/lib/imageAttachment";
+import Skeleton from "@/components/ui/Skeleton";
 import type { ChatMessage } from "@/types";
 
 interface ChatViewProps {
@@ -9,15 +12,16 @@ interface ChatViewProps {
   assistantName: string;
   /** True while waiting for a reply — shows the typing indicator. */
   thinking: boolean;
-  onSend: (text: string) => void;
+  /** `image` is an optional data-URL attachment (analyzed via Mira Vision). */
+  onSend: (text: string, image?: string) => void;
   onBack: () => void;
 }
 
 /**
- * A WhatsApp-style text chat over the same conversation the voice call uses.
- * Full-screen messaging UI: contact header, bubble timeline with timestamps,
- * a typing indicator, and a sticky composer. Sending here is text-only — no
- * voice playback — so it works as a quiet, manual way to talk to Mira.
+ * Cosmic messenger chat (mockups 7 & 14) over the same conversation the voice
+ * call uses. Mira's portrait-halo backdrop, glass received bubbles (left) and
+ * gradient sent bubbles (right) with timestamps + read marks, a typing
+ * indicator, and a sticky composer. Text-only — no voice playback.
  */
 export default function ChatView({
   messages,
@@ -27,18 +31,17 @@ export default function ChatView({
   onBack,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
   const [viewportH, setViewportH] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  // Keep pinned to the latest message / typing indicator.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, thinking, viewportH]);
 
-  // Track the *visual* viewport so the composer stays above the iOS keyboard.
-  // `fixed inset-0` would keep the panel full-height and hide the input behind
-  // the keyboard; sizing to visualViewport.height shrinks with it instead.
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -54,93 +57,242 @@ export default function ChatView({
 
   const submit = () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text && !attachment) return;
+    onSend(text, attachment ?? undefined);
     setDraft("");
-    onSend(text);
+    setAttachment(null);
+  };
+
+  const pickFile = async (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setAttaching(true);
+    try {
+      const scaled = await fileToAttachment(file);
+      if (scaled) setAttachment(scaled);
+    } catch {
+      /* ignore unreadable files */
+    } finally {
+      setAttaching(false);
+    }
   };
 
   return (
-    <div
-      className="fixed inset-x-0 top-0 z-40 flex flex-col bg-ink-900 animate-fade-up"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="fixed inset-x-0 top-0 z-40 mx-auto flex max-w-2xl flex-col bg-cosmic-base/92 backdrop-blur-xl"
       style={{ height: viewportH ? `${viewportH}px` : "100dvh" }}
     >
       {/* Header */}
-      <header className="flex items-center gap-3 px-3 sm:px-4 pb-2.5 pt-[calc(0.625rem_+_env(safe-area-inset-top))] bg-ink-800/95 border-b border-white/[0.06] backdrop-blur-md">
+      <header className="flex items-center gap-3 border-b border-white/[0.06] px-3 pb-3 pt-[calc(0.7rem_+_env(safe-area-inset-top))] sm:px-4">
         <button
           type="button"
           onClick={onBack}
-          className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/80"
           aria-label="Back to call"
+          className="grid h-9 w-9 place-items-center rounded-full text-ink-secondary hover:bg-white/[0.06] hover:text-ink-primary"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="m15 18-6-6 6-6" />
           </svg>
         </button>
-
-        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/10">
+        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-accent-violet/30">
           <Image src="/avatar.png" alt={assistantName} fill sizes="40px" className="object-cover" />
         </div>
-
         <div className="min-w-0 flex-1">
-          <p className="font-display font-semibold text-cream-50 leading-tight truncate">
+          <p className="truncate text-base font-semibold leading-tight text-ink-primary">
             {assistantName}
           </p>
-          <p className="text-[11px] text-signal-400/80 leading-tight">
-            {thinking ? "typing…" : "online"}
+          <p className="flex items-center gap-1.5 text-[11px] leading-tight text-ink-secondary">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${thinking ? "bg-status-speak" : "bg-status-ready"}`}
+            />
+            {thinking ? "typing…" : "Online"}
           </p>
         </div>
+        <span className="inline-flex items-center gap-1.5 rounded-full glass px-3 py-1.5 text-xs text-ink-secondary">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            className="text-accent-cyan"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+          >
+            <path d="M12 2 20 7v10l-8 5-8-5V7z" />
+          </svg>
+          AI Companion
+        </span>
       </header>
 
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="transcript-scroll flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-2"
+        className="thin-scroll flex-1 space-y-2.5 overflow-y-auto px-3 py-4 sm:px-5"
       >
         {messages.length === 0 && !thinking ? (
-          <div className="h-full grid place-items-center">
-            <p className="max-w-xs text-center text-sm text-cream-100/40 leading-relaxed">
-              Say hello to {assistantName}. Messages here are text-only — switch
-              to the call to hear her voice.
+          <div className="flex h-full flex-col items-center justify-center gap-6">
+            <PortraitHalo name={assistantName} />
+            <p className="max-w-xs text-center text-sm leading-relaxed text-ink-muted">
+              Say hello to {assistantName}. Messages here are text-only — switch to the call to hear
+              her voice.
             </p>
           </div>
         ) : (
-          messages.map((m) => <Bubble key={m.id} message={m} />)
+          <>
+            {messages.length > 0 && (
+              <div className="mb-4 flex justify-center">
+                <PortraitHalo name={assistantName} small />
+              </div>
+            )}
+            {messages.map((m) => (
+              <Bubble key={m.id} message={m} />
+            ))}
+          </>
         )}
-
         {thinking && <TypingBubble />}
       </div>
 
       {/* Composer */}
-      <div className="px-3 sm:px-4 pt-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] bg-ink-800/95 border-t border-white/[0.06]">
+      <div className="border-t border-white/[0.06] px-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-3 sm:px-4">
+        {/* Attachment preview */}
+        {(attachment || attaching) && (
+          <div className="mb-2 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+            {attaching ? (
+              <Skeleton rounded="rounded-xl" className="h-14 w-14" />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={attachment!}
+                alt="Attachment preview"
+                className="h-14 w-14 rounded-xl border border-white/10 object-cover"
+              />
+            )}
+            <span className="flex-1 truncate text-sm text-ink-secondary">
+              {attaching ? "Preparing image…" : "Image ready to send"}
+            </span>
+            {!attaching && (
+              <button
+                type="button"
+                onClick={() => setAttachment(null)}
+                aria-label="Remove attachment"
+                className="grid h-8 w-8 place-items-center rounded-full text-ink-muted hover:bg-white/10 hover:text-ink-primary"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
-          className="flex items-end gap-2"
+          className="flex items-center gap-2"
         >
-          <div className="flex-1 flex items-center rounded-2xl bg-white/[0.04] border border-white/[0.08] focus-within:border-signal-500/40 transition-colors px-4 py-2.5">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              void pickFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            aria-label="Attach image"
+            onClick={() => fileRef.current?.click()}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:text-accent-violet"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.33 3.33 0 0 1 4.71 4.71l-9.2 9.19a1.67 1.67 0 0 1-2.36-2.36l8.49-8.48" />
+            </svg>
+          </button>
+          <div className="glass flex flex-1 items-center rounded-full px-4 py-2.5 focus-within:border-accent-violet/40">
             <input
               type="text"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder={`Message ${assistantName}…`}
-              className="flex-1 bg-transparent text-sm text-cream-100 placeholder:text-cream-100/30 focus:outline-none"
+              placeholder={attachment ? "Add a caption…" : "Type a message…"}
+              className="flex-1 bg-transparent text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
               autoFocus
             />
           </div>
           <button
             type="submit"
-            disabled={!draft.trim()}
+            disabled={(!draft.trim() && !attachment) || attaching}
             aria-label="Send message"
-            className="grid place-items-center h-11 w-11 shrink-0 rounded-full bg-signal-500 text-ink-900 transition-all hover:bg-signal-400 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-onbrand disabled:opacity-30"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <span aria-hidden className="absolute inset-0 rounded-full bg-brand-gradient" />
+            <svg
+              width="19"
+              height="19"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="relative"
+            >
               <path d="M22 2 11 13" />
               <path d="M22 2 15 22l-4-9-9-4 20-7z" />
             </svg>
           </button>
         </form>
+      </div>
+    </motion.div>
+  );
+}
+
+function PortraitHalo({ name, small = false }: { name: string; small?: boolean }) {
+  const d = small ? 88 : 132;
+  return (
+    <div className="relative grid place-items-center" style={{ width: d, height: d }}>
+      <span
+        aria-hidden
+        className="absolute inset-0 rounded-full"
+        style={{
+          boxShadow: "0 0 60px 8px rgba(251,146,60,0.35)",
+          border: "2px solid rgba(251,146,60,0.55)",
+        }}
+      />
+      <div
+        className="relative overflow-hidden rounded-full"
+        style={{ width: d * 0.86, height: d * 0.86 }}
+      >
+        <Image src="/avatar.png" alt={name} fill sizes="132px" className="object-cover" />
       </div>
     </div>
   );
@@ -149,39 +301,63 @@ export default function ChatView({
 function Bubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+    >
       <div
-        className={`
-          max-w-[80%] sm:max-w-[70%] px-3.5 py-2 text-sm leading-relaxed
-          shadow-[0_1px_2px_rgba(0,0,0,0.3)]
-          ${isUser
-            ? "bg-signal-600/90 text-cream-50 rounded-2xl rounded-br-md"
-            : "bg-ink-700 text-cream-100 rounded-2xl rounded-bl-md"
-          }
-        `}
+        className={`relative max-w-[82%] px-4 py-2.5 text-sm leading-relaxed sm:max-w-[70%] ${
+          isUser
+            ? "rounded-2xl rounded-br-md bg-brand-gradient text-onbrand"
+            : "glass rounded-2xl rounded-bl-md text-ink-primary"
+        }`}
       >
-        <span className="whitespace-pre-wrap break-words">{message.content}</span>
+        {message.imageBase64 && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={message.imageBase64}
+            alt="Shared attachment"
+            className="mb-2 max-h-64 w-full rounded-xl border border-white/10 object-cover"
+          />
+        )}
+        {message.content && (
+          <span className="whitespace-pre-wrap break-words">{message.content}</span>
+        )}
         <span
-          className={`block text-[10px] mt-1 text-right tabular-nums ${
-            isUser ? "text-cream-50/60" : "text-cream-100/40"
-          }`}
+          className={`mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums ${isUser ? "text-onbrand/70" : "text-ink-muted"}`}
         >
           {formatTime(message.timestamp)}
+          {isUser && (
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m3 12 4 4 8-9M11 16l2 2 8-9" />
+            </svg>
+          )}
         </span>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
 function TypingBubble() {
   return (
     <div className="flex justify-start">
-      <div className="bg-ink-700 rounded-2xl rounded-bl-md px-4 py-3">
+      <div className="glass rounded-2xl rounded-bl-md px-4 py-3">
         <span className="flex gap-1">
           {[0, 0.2, 0.4].map((delay) => (
             <span
               key={delay}
-              className="h-1.5 w-1.5 rounded-full bg-cream-100/50"
+              className="h-1.5 w-1.5 rounded-full bg-ink-secondary"
               style={{ animation: `chatTyping 1.2s ease-in-out ${delay}s infinite` }}
             />
           ))}

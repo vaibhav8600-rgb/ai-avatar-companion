@@ -1,15 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import AvatarStage from "@/components/AvatarStage";
-import StatusIndicator from "@/components/StatusIndicator";
-import MicButton from "@/components/MicButton";
 import ChatTranscript from "@/components/ChatTranscript";
 import ChatView from "@/components/ChatView";
 import SettingsPanel from "@/components/SettingsPanel";
 import CameraPanel from "@/components/CameraPanel";
 import PermissionSetup from "@/components/PermissionSetup";
+import InstallAppPrompt from "@/components/InstallAppPrompt";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { StatusPill, MiraLogo, BuiltByFooter, Skeleton, type PillStatus } from "@/components/ui";
+import { fileToAttachment } from "@/lib/imageAttachment";
+import ThemeToggle from "@/components/ui/ThemeToggle";
+import VoiceMic from "@/components/voice/VoiceMic";
+import CaptionBar from "@/components/voice/CaptionBar";
+import ThinkingIndicator from "@/components/voice/ThinkingIndicator";
+import OfflineBanner from "@/components/voice/OfflineBanner";
+import { useVoiceLevel } from "@/lib/useVoiceLevel";
 import { sendChat } from "@/lib/apiClient";
 import { useCamera, type CameraFacingMode } from "@/lib/useCamera";
 import {
@@ -32,10 +40,7 @@ import {
   queryPermissionState,
   resetPermissions,
 } from "@/lib/permissionManager";
-import {
-  createRecognizer,
-  isSpeechRecognitionSupported,
-} from "@/lib/speechRecognition";
+import { createRecognizer, isSpeechRecognitionSupported } from "@/lib/speechRecognition";
 import {
   isSpeechSynthesisSupported,
   speak,
@@ -102,6 +107,11 @@ export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [interimText, setInterimText] = useState("");
   const [textDraft, setTextDraft] = useState("");
+  // Optional image attachment for the voice-screen text box (mirrors the chat
+  // composer; analyzed via Mira Vision so her spoken reply can reference it).
+  const [textImage, setTextImage] = useState<string | null>(null);
+  const [textAttaching, setTextAttaching] = useState(false);
+  const textFileRef = useRef<HTMLInputElement>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -180,6 +190,12 @@ export default function Page() {
   // ----- live video avatar (Simli) -----
   // Speaking/idle state is driven by the avatar's own audio events. Falls back
   // to the static image + browser speech when Simli isn't configured.
+  //
+  // Smart auto-switch: when the live stream errors mid-session (e.g. the
+  // WebRTC connection drops as the browser grabs the mic), tear it down
+  // cleanly so the UI falls back to the still image + server/browser voice —
+  // instead of keeping a dead client that looks "ready" but can't speak.
+  const liveStopRef = useRef<() => void>(() => {});
   const liveAvatar = useSimliAvatar({
     onSpeaking: () => {
       spokeRef.current = true; // watchdog: she actually started talking
@@ -191,13 +207,18 @@ export default function Page() {
     // "thinking" here: clear()/barge-in emits an async "silent" that can land
     // during the next turn's "thinking" and would otherwise flicker the label.
     onSilent: () => setAvatarState((s) => (s === "speaking" ? "idle" : s)),
-    onError: (m) => console.warn("Live avatar:", m),
+    onError: (m) => {
+      console.warn("Live avatar:", m);
+      liveStopRef.current(); // graceful fallback to the still image
+    },
   });
+  useEffect(() => {
+    liveStopRef.current = liveAvatar.stop;
+  }, [liveAvatar.stop]);
   // Live mode is "active" while connecting or streaming — AvatarStage shows a
   // loader until the face actually starts playing.
   const liveActive =
-    liveAvatarEnabled &&
-    (liveAvatar.status === "connecting" || liveAvatar.status === "ready");
+    liveAvatarEnabled && (liveAvatar.status === "connecting" || liveAvatar.status === "ready");
   const liveAvatarSupported = liveAvatar.status !== "unconfigured";
 
   // Speak a reply through the browser's built-in voice (fallback path).
@@ -226,12 +247,7 @@ export default function Page() {
   useEffect(() => {
     const prev = avatarStateRef.current;
     avatarStateRef.current = avatarState;
-    if (
-      handsFreeRef.current &&
-      prev === "speaking" &&
-      avatarState === "idle" &&
-      !cameraOpen
-    ) {
+    if (handsFreeRef.current && prev === "speaking" && avatarState === "idle" && !cameraOpen) {
       autoRestartCountRef.current = 0;
       startListeningRef.current();
     }
@@ -330,11 +346,18 @@ export default function Page() {
   // time she first speaks) — or tear the stream down when switched to image
   // mode, so we don't keep billing for an unused stream. No-op when Simli
   // isn't configured.
+  // Only tear down a session this effect actually started: a stray re-run
+  // (remount, dev double-invoke) must never disconnect a healthy stream —
+  // the SDK's teardown is noisy and, in dev, its console.error summons the
+  // click-blocking Next error overlay.
+  const liveStartedRef = useRef(false);
   useEffect(() => {
     if (liveAvatarEnabled && viewMode === "call") {
+      liveStartedRef.current = true;
       void liveAvatar.ensureConnected();
-    } else {
+    } else if (liveStartedRef.current) {
       // Image mode or text chat — drop the stream so we don't keep billing.
+      liveStartedRef.current = false;
       liveAvatar.stop();
     }
   }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
@@ -421,7 +444,13 @@ export default function Page() {
         // Tier 2: buffered Gemini chunks.
         if (!ok) {
           try {
-            await playServerTtsChunks({ chunks, model: ttsModel, voice: geminiVoice, volume, onFirstPlay });
+            await playServerTtsChunks({
+              chunks,
+              model: ttsModel,
+              voice: geminiVoice,
+              volume,
+              onFirstPlay,
+            });
             ok = true;
           } catch {
             // fall through to browser
@@ -436,7 +465,18 @@ export default function Page() {
       }
       speakWithBrowser(text);
     },
-    [interruptSpeech, liveAvatarEnabled, ttsModel, geminiVoice, volume, liveAvatar.ensureConnected, liveAvatar.speakStream, liveAvatar.speakChunks, liveAvatar.clear, speakWithBrowser],
+    [
+      interruptSpeech,
+      liveAvatarEnabled,
+      ttsModel,
+      geminiVoice,
+      volume,
+      liveAvatar.ensureConnected,
+      liveAvatar.speakStream,
+      liveAvatar.speakChunks,
+      liveAvatar.clear,
+      speakWithBrowser,
+    ],
   );
 
   /** Add an assistant message and speak it. */
@@ -444,7 +484,12 @@ export default function Page() {
     (text: string) => {
       setMessages((m) => [
         ...m,
-        { id: crypto.randomUUID(), role: "assistant", content: text, timestamp: new Date().toISOString() },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: text,
+          timestamp: new Date().toISOString(),
+        },
       ]);
       void voiceReply(text);
     },
@@ -487,15 +532,24 @@ export default function Page() {
     try {
       const memories = await listMemories();
       const prompt = buildRecognitionPrompt(memories, "object");
-      const result = await analyzeImage(frame, "recognition", prompt, buildCandidates(memories, "object"));
+      const result = await analyzeImage(
+        frame,
+        "recognition",
+        prompt,
+        buildCandidates(memories, "object"),
+      );
       pendingVisionContextRef.current = result.description;
       const match = matchMemory(result, memories, "object");
       if (match && match.confidence >= 0.6) {
         setAvatarState("recognized");
-        speakMiraResponse(`That looks like your ${spokenLabel(match.memory.label)}. ${result.description}`);
+        speakMiraResponse(
+          `That looks like your ${spokenLabel(match.memory.label)}. ${result.description}`,
+        );
       } else if (match) {
         setAvatarState("uncertain");
-        speakMiraResponse(`I see something similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure. ${result.description}`);
+        speakMiraResponse(
+          `I see something similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure. ${result.description}`,
+        );
       } else {
         setAvatarState("idle");
         speakMiraResponse(result.description);
@@ -513,10 +567,22 @@ export default function Page() {
       setVisionBusy(true);
       setAvatarState("learning");
       try {
-        const result = await analyzeImage(frame, "object", `Describe this object the user calls "${label}".`);
+        const result = await analyzeImage(
+          frame,
+          "object",
+          `Describe this object the user calls "${label}".`,
+        );
         const thumb = await makeThumbnail(frame);
-        const description = [result.description, notes && `Notes: ${notes}`].filter(Boolean).join(" ");
-        await saveVisualMemory({ type: "object", label, description, thumbnailBase64: thumb, tags: [] });
+        const description = [result.description, notes && `Notes: ${notes}`]
+          .filter(Boolean)
+          .join(" ");
+        await saveVisualMemory({
+          type: "object",
+          label,
+          description,
+          thumbnailBase64: thumb,
+          tags: [],
+        });
         speakMiraResponse(`Got it, I'll remember this as your ${spokenLabel(label)}.`);
       } catch {
         speakMiraResponse("Sorry, I couldn't save that object. Try again?");
@@ -548,7 +614,9 @@ export default function Page() {
           extraThumbnails: thumbs.slice(1),
           consented: true,
         });
-        speakMiraResponse(`Okay — I've saved ${name} as a known person, with your consent. You can remove this anytime in Settings.`);
+        speakMiraResponse(
+          `Okay — I've saved ${name} as a known person, with your consent. You can remove this anytime in Settings.`,
+        );
       } catch {
         speakMiraResponse("Sorry, I couldn't save that.");
       } finally {
@@ -589,10 +657,14 @@ export default function Page() {
       if (pending) {
         pendingVisionRef.current = null;
         const ans = transcript.trim();
-        const affirmative = /\b(yes|yeah|yep|sure|ok|okay|confirm|do it|please|go ahead|save)\b/i.test(ans);
+        const affirmative =
+          /\b(yes|yeah|yep|sure|ok|okay|confirm|do it|please|go ahead|save)\b/i.test(ans);
         if (pending.kind === "object-label") {
           // Keep a leading "my"; only drop a/an/the. Spoken form strips "my".
-          const label = ans.replace(/[.?!,]+$/g, "").replace(/^(a|an|the)\s+/i, "").trim();
+          const label = ans
+            .replace(/[.?!,]+$/g, "")
+            .replace(/^(a|an|the)\s+/i, "")
+            .trim();
           if (!label) {
             speakMiraResponse("Okay, never mind.");
           } else {
@@ -610,7 +682,9 @@ export default function Page() {
           }
           pendingVisionRef.current = { kind: "person-consent", frame: pending.frame, name };
           setVisionStatus("Confirm to save person");
-          speakMiraResponse(`I can remember known people only with permission. Should I save this person as ${name}?`);
+          speakMiraResponse(
+            `I can remember known people only with permission. Should I save this person as ${name}?`,
+          );
           return "done";
         }
         if (pending.kind === "person-consent") {
@@ -644,14 +718,20 @@ export default function Page() {
           setVisionStatus("Looking now");
           setAvatarState("looking");
           try {
-            const result = await analyzeImage(frame, "scene", "Describe what you see, briefly and naturally.");
+            const result = await analyzeImage(
+              frame,
+              "scene",
+              "Describe what you see, briefly and naturally.",
+            );
             pendingVisionContextRef.current = result.description;
             setVisionStatus("Camera ready");
             return "chat"; // let /api/chat phrase the reply with the camera context
           } catch (err) {
             setAvatarState("idle");
             setVisionStatus("Camera ready");
-            speakMiraResponse(err instanceof Error ? err.message : "Sorry, I couldn't see clearly.");
+            speakMiraResponse(
+              err instanceof Error ? err.message : "Sorry, I couldn't see clearly.",
+            );
             return "done";
           }
         }
@@ -662,7 +742,12 @@ export default function Page() {
           setVisionBusy(true);
           try {
             const memories = await listMemories();
-            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "object"), buildCandidates(memories, "object"));
+            const result = await analyzeImage(
+              frame,
+              "recognition",
+              buildRecognitionPrompt(memories, "object"),
+              buildCandidates(memories, "object"),
+            );
             pendingVisionContextRef.current = result.description;
             const match = matchMemory(result, memories, "object");
             if (match && match.confidence >= 0.6) {
@@ -670,10 +755,14 @@ export default function Page() {
               speakMiraResponse(`That looks like your ${spokenLabel(match.memory.label)}.`);
             } else if (match) {
               setAvatarState("uncertain");
-              speakMiraResponse(`It looks similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure.`);
+              speakMiraResponse(
+                `It looks similar to your ${spokenLabel(match.memory.label)}, but I'm not fully sure.`,
+              );
             } else {
               setAvatarState("idle");
-              speakMiraResponse("I don't recognize this yet. You can say “Remember this as…” and I'll save it.");
+              speakMiraResponse(
+                "I don't recognize this yet. You can say “Remember this as…” and I'll save it.",
+              );
             }
           } catch {
             setAvatarState("idle");
@@ -708,13 +797,17 @@ export default function Page() {
           // Always confirm before saving a person.
           pendingVisionRef.current = { kind: "person-consent", frame, name: det.label };
           setVisionStatus("Confirm to save person");
-          speakMiraResponse(`I can remember known people only with permission. Should I save this person as ${det.label}?`);
+          speakMiraResponse(
+            `I can remember known people only with permission. Should I save this person as ${det.label}?`,
+          );
           return "done";
         }
 
         case "recognize_known_person": {
           if (!knownPersonRecognition) {
-            speakMiraResponse("Known-person recognition is off. You can turn it on in Settings → Mira Vision.");
+            speakMiraResponse(
+              "Known-person recognition is off. You can turn it on in Settings → Mira Vision.",
+            );
             setVisionStatus("Camera ready");
             return "done";
           }
@@ -723,7 +816,12 @@ export default function Page() {
           setVisionBusy(true);
           try {
             const memories = await listMemories();
-            const result = await analyzeImage(frame, "recognition", buildRecognitionPrompt(memories, "person"), buildCandidates(memories, "person"));
+            const result = await analyzeImage(
+              frame,
+              "recognition",
+              buildRecognitionPrompt(memories, "person"),
+              buildCandidates(memories, "person"),
+            );
             pendingVisionContextRef.current = result.description;
             if (result.peopleCount < 1) {
               setAvatarState("idle");
@@ -755,7 +853,9 @@ export default function Page() {
           if (det.label) {
             await handleForget(det.label);
           } else {
-            speakMiraResponse("Which one should I forget? Say its name, like “forget my keyboard.”");
+            speakMiraResponse(
+              "Which one should I forget? Say its name, like “forget my keyboard.”",
+            );
           }
           return "done";
         }
@@ -764,20 +864,31 @@ export default function Page() {
           return "chat";
       }
     },
-    [camera, knownPersonRecognition, handleTeachObjectSave, handleTeachPersonSave, handleForget, speakMiraResponse, interruptSpeech],
+    [
+      camera,
+      knownPersonRecognition,
+      handleTeachObjectSave,
+      handleTeachPersonSave,
+      handleForget,
+      speakMiraResponse,
+      interruptSpeech,
+    ],
   );
 
   // ----- core flow: send a user turn to the AI -----
   // `speak` is true for the voice call and false for the text chat, which is
   // a quiet, text-only conversation over the same history.
   const sendUserMessage = useCallback(
-    async (text: string, opts?: { speak?: boolean; retry?: boolean }) => {
+    async (text: string, opts?: { speak?: boolean; retry?: boolean; image?: string }) => {
       const shouldSpeak = opts?.speak ?? true;
       const trimmed = text.trim();
-      if (!trimmed) return;
+      const image = opts?.image;
+      if (!trimmed && !image) return;
+      // Image-only turns get a sensible default question so the reply has intent.
+      const content = trimmed || (image ? "What's in this image?" : "");
 
       // Remember this turn for the Retry affordance, and clear any prior error.
-      retryTextRef.current = trimmed;
+      retryTextRef.current = content;
       lastSpeakRef.current = shouldSpeak;
       setCanRetry(false);
 
@@ -789,12 +900,29 @@ export default function Page() {
             {
               id: crypto.randomUUID(),
               role: "user",
-              content: trimmed,
+              content,
               timestamp: new Date().toISOString(),
+              ...(image ? { imageBase64: image } : {}),
             } as ChatMessage,
           ];
       if (!opts?.retry) setMessages(nextMessages);
       setInterimText("");
+
+      // A shared image is analyzed via Mira Vision so the reply can reference
+      // it; the description is injected as this turn's vision context.
+      if (image) {
+        setAvatarState("thinking");
+        try {
+          const result = await analyzeImage(
+            image,
+            "scene",
+            "Describe what's in this image the user shared, briefly and naturally.",
+          );
+          pendingVisionContextRef.current = result.description;
+        } catch {
+          // proceed without vision context if analysis fails
+        }
+      }
 
       // Live Vision Conversation: when the camera is active and live vision +
       // auto-capture are on, classify the turn and possibly handle it visually.
@@ -849,8 +977,8 @@ export default function Page() {
         const msg = offline
           ? "You're offline. Reconnect and try again."
           : err instanceof Error
-          ? err.message
-          : "Connection failed";
+            ? err.message
+            : "Connection failed";
         setErrorMessage(msg);
         setCanRetry(true); // offer a Retry button
         setAvatarState("error");
@@ -862,7 +990,9 @@ export default function Page() {
   // ----- mic actions -----
   const startListening = useCallback(() => {
     if (!isSpeechRecognitionSupported()) {
-      setErrorMessage("Microphone speech recognition isn't supported in this browser. Type your message instead.");
+      setErrorMessage(
+        "Microphone speech recognition isn't supported in this browser. Type your message instead.",
+      );
       setAvatarState("error");
       return;
     }
@@ -966,6 +1096,11 @@ export default function Page() {
       } else if (avatarState === "speaking") {
         interruptSpeech();
         setAvatarState("idle");
+      } else if (avatarState === "thinking") {
+        // Never lock the user out: abort the in-flight turn and listen again.
+        abortRef.current?.abort();
+        interruptSpeech();
+        startListening();
       } else {
         startListening();
       }
@@ -978,21 +1113,35 @@ export default function Page() {
     }
   }, [pushToTalk, stopListening]);
 
-  // ----- text fallback -----
+  // ----- text fallback (with optional image attachment) -----
   const handleSubmitText = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      if (!textDraft.trim()) return;
-      const text = textDraft;
+      const text = textDraft.trim();
+      const image = textImage ?? undefined;
+      if (!text && !image) return;
       setTextDraft("");
+      setTextImage(null);
       // Unlock mobile speech within this gesture before the async reply.
       primeSpeechSynthesis();
       primeTtsAudio();
       interruptSpeech();
-      void sendUserMessage(text);
+      void sendUserMessage(text, { image });
     },
-    [textDraft, sendUserMessage, interruptSpeech],
+    [textDraft, textImage, sendUserMessage, interruptSpeech],
   );
+
+  const pickTextImage = useCallback(async (file?: File) => {
+    setTextAttaching(true);
+    try {
+      const scaled = await fileToAttachment(file);
+      if (scaled) setTextImage(scaled);
+    } catch {
+      /* ignore unreadable files */
+    } finally {
+      setTextAttaching(false);
+    }
+  }, []);
 
   // ----- stop speaking -----
   const handleStopSpeaking = useCallback(() => {
@@ -1031,10 +1180,10 @@ export default function Page() {
 
   // ----- text chat (WhatsApp-style, voice off) -----
   const handleChatSend = useCallback(
-    (text: string) => {
+    (text: string, image?: string) => {
       // Stop any voice playback so the two modes don't talk over each other.
       interruptSpeech();
-      void sendUserMessage(text, { speak: false });
+      void sendUserMessage(text, { speak: false, image });
     },
     [sendUserMessage, interruptSpeech],
   );
@@ -1061,262 +1210,454 @@ export default function Page() {
 
   const assistantDisplayName = memory.assistantName || ASSISTANT_NAME;
 
+  // Synthetic amplitude driving the orb pulse + waveforms (lib/useVoiceLevel —
+  // decoupled from the audio pipeline on purpose; see the hook's docstring).
+  const voiceLevel = useVoiceLevel(avatarState);
+
+  // Map the internal state machine onto the status-pill vocabulary.
+  const pillStatus: PillStatus = !isOnline
+    ? "offline"
+    : avatarState === "listening"
+      ? "listening"
+      : avatarState === "thinking" ||
+          avatarState === "looking" ||
+          avatarState === "recognizing" ||
+          avatarState === "learning"
+        ? "thinking"
+        : avatarState === "speaking"
+          ? "speaking"
+          : avatarState === "error"
+            ? "recovering"
+            : "ready";
+
   return (
     <ErrorBoundary>
-      <main className="relative min-h-dvh flex flex-col">
-        {/* Offline banner */}
-        {!isOnline && (
-          <div className="relative z-20 bg-amber-500/15 border-b border-amber-500/30 px-4 py-1.5 text-center text-[11px] text-amber-200/90">
-            You&apos;re offline — Mira needs a connection to think and speak.
-          </div>
-        )}
-
-        {/* Top bar */}
-        <header className="relative z-10 flex items-center justify-between px-6 sm:px-10 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
-          <div className="flex items-center gap-3">
-            <div className="h-7 w-7 rounded-full bg-gradient-to-br from-signal-400 to-signal-600" />
-            <div className="leading-tight">
-              <p className="font-display font-semibold text-cream-50 tracking-tight">
-                {assistantDisplayName}
-              </p>
-              <p className="text-[10px] tracking-[0.18em] uppercase text-cream-100/35">
-                by Vaibhav Rajput
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => openCamera()}
-              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
-              aria-label="Open camera (Mira Vision)"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                <circle cx="12" cy="13" r="4" />
-              </svg>
-            </button>
-
-            <button
-              type="button"
-              onClick={openChat}
-              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
-              aria-label="Open chat"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              className="grid place-items-center h-9 w-9 rounded-full hover:bg-white/[0.06] text-cream-100/70"
-              aria-label="Open settings"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </button>
-          </div>
-        </header>
-
-        {/* Stage */}
-        <section className="relative z-0 flex-1 min-h-0 flex flex-col items-center justify-center px-4 py-6 overflow-y-auto">
-          <AvatarStage
-            state={avatarState}
-            interimText={interimText}
-            videoRef={liveAvatar.videoRef}
-            audioRef={liveAvatar.audioRef}
-            liveActive={liveActive}
+      <div className="relative sm:grid sm:min-h-dvh sm:place-items-center sm:p-6">
+        <div className="relative w-full sm:mx-auto sm:max-w-4xl">
+          {/* Neon window frame — the mockups' glowing gradient edge (desktop;
+              mobile stays full-bleed for space). Purely decorative. */}
+          <div
+            aria-hidden
+            className="decor-layer absolute -inset-[2px] hidden rounded-[26px] bg-brand-gradient opacity-50 blur-xl animate-border-glow sm:block"
           />
-
-          <div className="mt-8">
-            <StatusIndicator state={avatarState} assistantName={assistantDisplayName} />
-          </div>
-
-          {/* Captions — Mira's spoken reply as on-screen text. */}
-          {captionsEnabled && caption && avatarState === "speaking" && (
-            <p className="mt-4 max-w-md text-center text-sm text-cream-100/75 leading-relaxed animate-fade-up">
-              {caption}
-            </p>
-          )}
-
-          {errorMessage && avatarState === "error" && (
-            <div className="mt-4 flex flex-col items-center gap-2 animate-fade-up">
-              <p className="max-w-md text-center text-sm text-red-300/80">{errorMessage}</p>
-              {canRetry && (
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  className="px-4 py-1.5 rounded-full text-xs uppercase tracking-wider bg-signal-500/20 border border-signal-500/50 text-signal-400 hover:bg-signal-500/30"
-                >
-                  Retry
-                </button>
+          <div
+            aria-hidden
+            className="decor-layer absolute -inset-px hidden rounded-[25px] bg-brand-gradient opacity-40 sm:block"
+          />
+          <main className="relative z-0 flex min-h-dvh w-full flex-col sm:h-[min(92dvh,900px)] sm:min-h-0 sm:overflow-hidden sm:rounded-panel sm:glass">
+            <AnimatePresence>
+              {!isOnline && (
+                <OfflineBanner key="offline" onRetry={canRetry ? handleRetry : undefined} />
               )}
-            </div>
-          )}
-        </section>
+            </AnimatePresence>
 
-        {/* Bottom controls */}
-        <footer className="relative z-10 shrink-0 px-4 pt-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))]">
-          <div className="mx-auto max-w-2xl">
-            <div className="flex flex-col items-center gap-4">
-              {/* Big primary mic */}
-              <div className="flex items-center gap-4">
-                {avatarState === "speaking" && (
-                  <button
-                    type="button"
-                    onClick={handleStopSpeaking}
-                    className="px-3 py-1.5 rounded-full text-xs uppercase tracking-wider bg-white/[0.04] border border-white/[0.08] text-cream-100/70 hover:bg-white/[0.08]"
-                  >
-                    Stop
-                  </button>
-                )}
-                <MicButton
-                  state={avatarState}
-                  onPress={handleMicPress}
-                  onRelease={handleMicRelease}
-                  pushToTalk={pushToTalk}
-                />
-                {messages.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setTranscriptOpen((v) => !v)}
-                    className="px-3 py-1.5 rounded-full text-xs uppercase tracking-wider bg-white/[0.04] border border-white/[0.08] text-cream-100/70 hover:bg-white/[0.08]"
-                  >
-                    {transcriptOpen ? "Hide" : "Show"}
-                  </button>
-                )}
+            {/* Top bar: identity on the left, the four global controls on the
+                right (transcript · theme · hands-free · settings). */}
+            <header className="relative z-20 flex items-center justify-between gap-2 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6">
+              <div className="flex min-w-0 items-center gap-3">
+                <MiraLogo size={40} />
+                <div className="flex min-w-0 flex-col items-start gap-1">
+                  <span className="truncate text-xl font-bold leading-none tracking-tight text-ink-primary sm:text-2xl">
+                    {assistantDisplayName}
+                  </span>
+                  <StatusPill status={pillStatus} />
+                </div>
               </div>
 
-              {/* Text fallback */}
-              <form onSubmit={handleSubmitText} className="w-full max-w-lg">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.03] border border-white/[0.06] focus-within:border-signal-500/40 transition-colors">
-                  <input
-                    type="text"
-                    value={textDraft}
-                    onChange={(e) => setTextDraft(e.target.value)}
-                    placeholder="Or type a message…"
-                    className="flex-1 bg-transparent text-sm text-cream-100 placeholder:text-cream-100/30 focus:outline-none"
-                    disabled={avatarState === "thinking"}
-                  />
-                  <button
-                    type="submit"
-                    disabled={!textDraft.trim() || avatarState === "thinking"}
-                    className="text-xs uppercase tracking-wider text-signal-400 hover:text-signal-500 disabled:opacity-30 disabled:cursor-not-allowed"
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTranscriptOpen((v) => !v)}
+                  aria-label="Toggle transcript"
+                  aria-pressed={transcriptOpen}
+                  className={`grid h-10 w-10 place-items-center rounded-full glass ${transcriptOpen ? "text-accent-cyan" : "text-ink-secondary hover:text-ink-primary"}`}
+                >
+                  <svg
+                    width="17"
+                    height="17"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   >
-                    Send
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6M8 13h8M8 17h5" />
+                  </svg>
+                </button>
+                <ThemeToggle />
+                <button
+                  type="button"
+                  onClick={() => setHandsFree((v) => !v)}
+                  role="switch"
+                  aria-checked={handsFree}
+                  aria-label="Toggle hands-free mode"
+                  className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm transition-colors ${
+                    handsFree
+                      ? "border-accent-violet/50 bg-brand-gradient-soft text-ink-primary"
+                      : "glass border-white/10 text-ink-secondary hover:text-ink-primary"
+                  }`}
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M2 12a10 10 0 0 1 20 0" />
+                    <path d="M6 12a6 6 0 0 1 12 0" />
+                    <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+                  </svg>
+                  <span className="hidden sm:inline">Hands-free</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label="Open settings"
+                  className="grid h-10 w-10 place-items-center rounded-full glass text-ink-secondary hover:text-ink-primary"
+                >
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                </button>
+              </div>
+            </header>
+
+            {/* Stage + controls. One scroll column: m-auto centers the stack
+                when there's room and keeps the top reachable (scroll from the
+                top) when the viewport is short — small phones included. */}
+            <section className="thin-scroll relative z-0 flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
+              <div className="m-auto flex w-full flex-col items-center gap-5 py-3">
+                <AvatarStage
+                  state={avatarState}
+                  interimText={interimText}
+                  videoRef={liveAvatar.videoRef}
+                  audioRef={liveAvatar.audioRef}
+                  liveActive={liveActive}
+                  levelRef={voiceLevel}
+                />
+
+                {/* Camera · mic · chat — kept above the decorative stage layer. */}
+                <div className="relative z-10 flex items-center justify-center gap-4 sm:gap-8">
+                  <button
+                    type="button"
+                    onClick={() => openCamera()}
+                    className="group flex flex-col items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary"
+                  >
+                    <span className="grid h-12 w-12 place-items-center rounded-full glass transition-shadow duration-300 group-hover:shadow-glow-violet sm:h-14 sm:w-14">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                        <circle cx="12" cy="13" r="4" />
+                      </svg>
+                    </span>
+                    <span className="text-xs">Camera</span>
+                  </button>
+
+                  <div className="flex flex-col items-center gap-2">
+                    <VoiceMic
+                      state={avatarState}
+                      levelRef={voiceLevel}
+                      onPress={handleMicPress}
+                      onRelease={handleMicRelease}
+                      pushToTalk={pushToTalk}
+                    />
+                    {avatarState === "speaking" && (
+                      <button
+                        type="button"
+                        onClick={handleStopSpeaking}
+                        className="rounded-full glass px-3 py-1 text-xs text-ink-secondary hover:text-ink-primary"
+                      >
+                        Stop
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={openChat}
+                    className="group flex flex-col items-center gap-1.5 text-ink-secondary transition-colors hover:text-ink-primary"
+                  >
+                    <span className="grid h-12 w-12 place-items-center rounded-full glass transition-shadow duration-300 group-hover:shadow-glow-violet sm:h-14 sm:w-14">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </span>
+                    <span className="text-xs">Chat</span>
                   </button>
                 </div>
-              </form>
 
-              <p className="text-[11px] text-cream-100/30 text-center max-w-md leading-relaxed">
-                Mira is a virtual AI assistant. Your microphone is only used while
-                you&apos;re speaking. Conversations are stored locally in this browser.
-              </p>
+                {/* State-driven caption / status zone */}
+                <div className="flex min-h-[64px] w-full items-center justify-center">
+                  <AnimatePresence mode="wait">
+                    {avatarState === "listening" && (
+                      <CaptionBar
+                        key="listen"
+                        mode="listening"
+                        text={interimText}
+                        levelRef={voiceLevel}
+                        assistantName={assistantDisplayName}
+                      />
+                    )}
+                    {avatarState === "thinking" && <ThinkingIndicator key="think" />}
+                    {avatarState === "speaking" && captionsEnabled && caption && (
+                      <CaptionBar
+                        key="speak"
+                        mode="speaking"
+                        text={caption}
+                        levelRef={voiceLevel}
+                        assistantName={assistantDisplayName}
+                      />
+                    )}
+                    {avatarState === "error" && errorMessage && (
+                      <motion.div
+                        key="err"
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="glass flex max-w-md flex-col items-center gap-3 rounded-card border border-status-error/30 px-5 py-4"
+                      >
+                        <p className="text-center text-sm text-red-300/90">{errorMessage}</p>
+                        {canRetry && (
+                          <button
+                            type="button"
+                            onClick={handleRetry}
+                            className="rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-medium text-onbrand"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
 
-              <p className="text-[10px] uppercase tracking-[0.2em] text-cream-100/25">
-                Crafted by Vaibhav Rajput
-              </p>
-            </div>
-          </div>
-        </footer>
+                {/* Text fallback (with optional image attachment) */}
+                <form onSubmit={handleSubmitText} className="w-full max-w-lg">
+                  {(textImage || textAttaching) && (
+                    <div className="mb-2 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+                      {textAttaching ? (
+                        <Skeleton rounded="rounded-lg" className="h-12 w-12" />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={textImage!}
+                          alt="Attachment preview"
+                          className="h-12 w-12 rounded-lg border border-white/10 object-cover"
+                        />
+                      )}
+                      <span className="flex-1 truncate text-xs text-ink-secondary">
+                        {textAttaching ? "Preparing image…" : "Image ready — Mira will look at it"}
+                      </span>
+                      {!textAttaching && (
+                        <button
+                          type="button"
+                          onClick={() => setTextImage(null)}
+                          aria-label="Remove attachment"
+                          className="grid h-7 w-7 place-items-center rounded-full text-ink-muted hover:bg-white/10 hover:text-ink-primary"
+                        >
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path d="M18 6 6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="glass flex items-center gap-2 rounded-full px-3 py-2 transition-colors focus-within:border-accent-violet/40">
+                    <input
+                      ref={textFileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        void pickTextImage(e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="Attach image"
+                      onClick={() => textFileRef.current?.click()}
+                      disabled={avatarState === "thinking"}
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:text-accent-violet disabled:opacity-30"
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.33 3.33 0 0 1 4.71 4.71l-9.2 9.19a1.67 1.67 0 0 1-2.36-2.36l8.49-8.48" />
+                      </svg>
+                    </button>
+                    <input
+                      type="text"
+                      value={textDraft}
+                      onChange={(e) => setTextDraft(e.target.value)}
+                      placeholder={textImage ? "Add a caption…" : "Or type a message…"}
+                      className="flex-1 bg-transparent text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
+                      disabled={avatarState === "thinking"}
+                    />
+                    <button
+                      type="submit"
+                      disabled={
+                        (!textDraft.trim() && !textImage) ||
+                        avatarState === "thinking" ||
+                        textAttaching
+                      }
+                      className="text-xs font-medium uppercase tracking-wider text-accent-cyan hover:text-accent-violet disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
 
-        {/* First-run camera + mic permission onboarding */}
-        <PermissionSetup
-          open={permissionSetupOpen}
-          onGranted={() => {
-            setPermissionsInitialized(true);
-            setPermissionSetupOpen(false);
-          }}
-          onDismiss={() => setPermissionSetupOpen(false)}
-        />
+            <footer className="relative z-10 shrink-0 px-4 pb-[calc(0.6rem_+_env(safe-area-inset-bottom))] pt-1.5">
+              <BuiltByFooter />
+            </footer>
+          </main>
+        </div>
+      </div>
 
-        {/* Mira Vision camera (full-screen overlay) */}
-        {cameraOpen && (
-          <CameraPanel
-            videoRef={camera.videoRef}
-            status={camera.status}
-            error={camera.error}
-            assistantName={assistantDisplayName}
-            busy={visionBusy}
-            liveVision={liveVisionEnabled && autoCaptureVision}
-            visionStatus={visionStatus}
-            capture={camera.capture}
-            onLook={handleLook}
-            onTeachObjectSave={handleTeachObjectSave}
-            onTeachPersonSave={handleTeachPersonSave}
-            onClose={closeCamera}
-            avatarState={avatarState}
-            pushToTalk={pushToTalk}
-            interimText={interimText}
-            onMicPress={handleMicPress}
-            onMicRelease={handleMicRelease}
-            currentFacingMode={camera.currentFacingMode}
-            canSwitchCamera={camera.availableVideoDevices.length > 1}
-            isSwitchingCamera={camera.isSwitchingCamera}
-            onSwitchCamera={() => void camera.switchCamera()}
-          />
-        )}
+      {/* First-run camera + mic permission onboarding */}
+      <PermissionSetup
+        open={permissionSetupOpen}
+        onGranted={() => {
+          setPermissionsInitialized(true);
+          setPermissionSetupOpen(false);
+        }}
+        onDismiss={() => setPermissionSetupOpen(false)}
+      />
 
-        {/* WhatsApp-style text chat (full-screen overlay) */}
-        {viewMode === "chat" && (
-          <ChatView
-            messages={messages}
-            assistantName={assistantDisplayName}
-            thinking={avatarState === "thinking"}
-            onSend={handleChatSend}
-            onBack={() => setViewMode("call")}
-          />
-        )}
-
-        {/* Side panels */}
-        <ChatTranscript
-          messages={messages}
-          expanded={transcriptOpen}
-          onToggle={() => setTranscriptOpen((v) => !v)}
+      {/* Mira Vision camera (full-screen overlay) */}
+      {cameraOpen && (
+        <CameraPanel
+          videoRef={camera.videoRef}
+          status={camera.status}
+          error={camera.error}
           assistantName={assistantDisplayName}
-        />
-
-        <SettingsPanel
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          memory={memory}
-          onMemoryChange={setMemory}
-          volume={volume}
-          onVolumeChange={setVolume}
-          voiceName={voiceName}
-          onVoiceChange={setVoiceName}
+          busy={visionBusy}
+          liveVision={liveVisionEnabled && autoCaptureVision}
+          visionStatus={visionStatus}
+          capture={camera.capture}
+          onLook={handleLook}
+          onTeachObjectSave={handleTeachObjectSave}
+          onTeachPersonSave={handleTeachPersonSave}
+          onClose={closeCamera}
+          avatarState={avatarState}
           pushToTalk={pushToTalk}
-          onPushToTalkChange={setPushToTalk}
-          handsFree={handsFree}
-          onHandsFreeChange={setHandsFree}
-          captionsEnabled={captionsEnabled}
-          onCaptionsChange={setCaptionsEnabled}
-          liveAvatarSupported={liveAvatarSupported}
-          liveAvatarEnabled={liveAvatarEnabled}
-          onLiveAvatarChange={setLiveAvatarEnabled}
-          ttsModel={ttsModel}
-          onTtsModelChange={setTtsModel}
-          geminiVoice={geminiVoice}
-          onGeminiVoiceChange={setGeminiVoice}
-          knownPersonRecognition={knownPersonRecognition}
-          onKnownPersonRecognitionChange={setKnownPersonRecognition}
-          liveVisionEnabled={liveVisionEnabled}
-          onLiveVisionChange={setLiveVisionEnabled}
-          autoCaptureVision={autoCaptureVision}
-          onAutoCaptureVisionChange={setAutoCaptureVision}
-          onResetPermissions={() => {
-            resetPermissions();
-            setSettingsOpen(false);
-            setPermissionSetupOpen(true);
-          }}
-          onResetConversation={handleReset}
+          interimText={interimText}
+          onMicPress={handleMicPress}
+          onMicRelease={handleMicRelease}
+          currentFacingMode={camera.currentFacingMode}
+          canSwitchCamera={camera.availableVideoDevices.length > 1}
+          isSwitchingCamera={camera.isSwitchingCamera}
+          onSwitchCamera={() => void camera.switchCamera()}
         />
-      </main>
+      )}
+
+      {/* WhatsApp-style text chat (full-screen overlay) */}
+      {viewMode === "chat" && (
+        <ChatView
+          messages={messages}
+          assistantName={assistantDisplayName}
+          thinking={avatarState === "thinking"}
+          onSend={handleChatSend}
+          onBack={() => setViewMode("call")}
+        />
+      )}
+
+      {/* Side panels */}
+      <ChatTranscript
+        messages={messages}
+        expanded={transcriptOpen}
+        onToggle={() => setTranscriptOpen((v) => !v)}
+        assistantName={assistantDisplayName}
+      />
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        memory={memory}
+        onMemoryChange={setMemory}
+        volume={volume}
+        onVolumeChange={setVolume}
+        voiceName={voiceName}
+        onVoiceChange={setVoiceName}
+        pushToTalk={pushToTalk}
+        onPushToTalkChange={setPushToTalk}
+        handsFree={handsFree}
+        onHandsFreeChange={setHandsFree}
+        captionsEnabled={captionsEnabled}
+        onCaptionsChange={setCaptionsEnabled}
+        liveAvatarSupported={liveAvatarSupported}
+        liveAvatarEnabled={liveAvatarEnabled}
+        onLiveAvatarChange={setLiveAvatarEnabled}
+        ttsModel={ttsModel}
+        onTtsModelChange={setTtsModel}
+        geminiVoice={geminiVoice}
+        onGeminiVoiceChange={setGeminiVoice}
+        knownPersonRecognition={knownPersonRecognition}
+        onKnownPersonRecognitionChange={setKnownPersonRecognition}
+        liveVisionEnabled={liveVisionEnabled}
+        onLiveVisionChange={setLiveVisionEnabled}
+        autoCaptureVision={autoCaptureVision}
+        onAutoCaptureVisionChange={setAutoCaptureVision}
+        onResetPermissions={() => {
+          resetPermissions();
+          setSettingsOpen(false);
+          setPermissionSetupOpen(true);
+        }}
+        onResetConversation={handleReset}
+      />
+
+      {/* PWA install experience (self-managed via beforeinstallprompt) */}
+      <InstallAppPrompt />
     </ErrorBoundary>
   );
 }

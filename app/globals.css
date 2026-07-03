@@ -2,60 +2,221 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap");
+/* ---------------------------------------------------------------------------
+   Theme variables.
 
+   Colors are stored as space-separated RGB triplets so Tailwind classes can
+   apply alpha modifiers (`bg-status-error/10` → `rgb(var(--status-error)/0.1)`).
+   Raw CSS consumers wrap them in rgb(): `rgb(var(--grad-start))`.
+
+   `--contrast` backs Tailwind's `white` scale: white in dark mode, near-black
+   in light mode — so every `bg-white/[0.03]` / `border-white/10` surface tint
+   inverts gracefully. Text that must stay white on brand-gradient fills uses
+   the fixed `onbrand` color instead.
+--------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
+
+  /* Surfaces */
+  --bg-base: 5 6 15;
+  --bg-elevated: 10 11 26;
+  --contrast: 255 255 255;
+
+  /* Text */
+  --text-primary: 245 247 255;
+  --text-secondary: 154 164 191;
+  --text-muted: 94 103 136;
+
+  /* Brand gradient (constant across themes) */
+  --grad-start: 59 130 246;
+  --grad-mid: 124 58 237;
+  --grad-end: 217 70 239;
+
+  /* Accents + status (constant across themes) */
+  --accent-cyan: 34 211 238;
+  --accent-violet: 139 92 246;
+  --status-ready: 16 185 129;
+  --status-listen: 56 189 248;
+  --status-think: 139 92 246;
+  --status-speak: 245 158 11;
+  --status-error: 239 68 68;
+
+  /* Glass */
+  --glass-fill: rgba(255, 255, 255, 0.045);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-blur: 12px;
+
+  /* Nebula corner blooms */
+  --nebula-a: rgba(26, 11, 46, 0.55);
+  --nebula-b: rgba(11, 26, 58, 0.45);
+  --nebula-c: rgba(42, 11, 46, 0.5);
+  --nebula-d: rgba(26, 11, 46, 0.4);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: 243 245 251;
+  --bg-elevated: 255 255 255;
+  --contrast: 15 23 42;
+
+  --text-primary: 15 23 42;
+  --text-secondary: 71 85 105;
+  --text-muted: 148 163 184;
+
+  --glass-fill: rgba(255, 255, 255, 0.62);
+  --glass-border: rgba(15, 23, 42, 0.1);
+
+  --nebula-a: rgba(196, 181, 253, 0.35);
+  --nebula-b: rgba(147, 197, 253, 0.3);
+  --nebula-c: rgba(240, 171, 252, 0.3);
+  --nebula-d: rgba(196, 181, 253, 0.25);
 }
 
 html,
 body {
   height: 100%;
-  background: #0E0F13;
-  color: #F2EDE3;
-  font-family: "Inter", system-ui, sans-serif;
+  background: rgb(var(--bg-base));
+  color: rgb(var(--text-primary));
+  font-family: var(--font-inter), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Subtle ambient gradient behind everything — matches the avatar's lighting. */
+/* Smooth theme switching: color-only transitions (transforms/opacity untouched,
+   so Framer Motion and hover lifts are unaffected). Utility classes still win
+   on specificity where they set their own transitions. */
+*,
+*::before,
+*::after {
+  transition:
+    background-color 250ms ease,
+    border-color 250ms ease,
+    color 250ms ease,
+    fill 250ms ease,
+    stroke 250ms ease;
+}
+
+/* ---------------------------------------------------------------------------
+   Cosmic backdrop — nebula blooms over the base. The starfield canvas
+   (<CosmicBackground/>) sits above this and fades out in light mode.
+--------------------------------------------------------------------------- */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
+  z-index: -2;
   background:
-    radial-gradient(circle at 20% 30%, rgba(125, 179, 216, 0.08), transparent 50%),
-    radial-gradient(circle at 80% 70%, rgba(217, 169, 100, 0.05), transparent 55%);
-  z-index: 0;
+    radial-gradient(45% 45% at 15% 20%, var(--nebula-a), transparent 70%),
+    radial-gradient(40% 40% at 85% 25%, var(--nebula-b), transparent 70%),
+    radial-gradient(45% 45% at 80% 90%, var(--nebula-c), transparent 70%),
+    radial-gradient(40% 40% at 10% 95%, var(--nebula-d), transparent 70%), rgb(var(--bg-base));
 }
 
-/* Avatar frame glow ring — shared base used by AvatarStage. */
-.aura-ring {
-  position: absolute;
-  inset: -28px;
-  border-radius: 9999px;
+/* Cosmic "floor": glowing light blooms rising from the bottom edge, like the
+   reflective horizon in the mockups. Pure CSS, zero per-frame cost. */
+body::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36vh;
   pointer-events: none;
-  filter: blur(20px);
-  opacity: 0;
-  transition: opacity 600ms ease;
+  z-index: -1;
+  background:
+    radial-gradient(55% 90% at 18% 100%, rgb(var(--grad-start) / 0.18), transparent 65%),
+    radial-gradient(55% 90% at 82% 100%, rgb(var(--grad-end) / 0.16), transparent 65%),
+    radial-gradient(80% 60% at 50% 105%, rgb(var(--grad-mid) / 0.14), transparent 70%);
+}
+[data-theme="light"] body::after {
+  opacity: 0.45;
 }
 
-.aura-ring.is-active {
-  opacity: 1;
+/* Decorative layers must NEVER intercept input. The !important + descendant
+   selector guards against libraries (e.g. R3F's event system) re-enabling
+   pointer events on elements they create inside a decorated layer. */
+.decor-layer,
+.decor-layer * {
+  pointer-events: none !important;
 }
 
-/* Slim scrollbar for transcript panel */
+/* The starfield canvas runs in both themes (it picks theme-aware colors per
+   frame); keep a soft transition for theme switches. */
+.starfield {
+  transition: opacity 400ms ease;
+}
+
+/* ---------------------------------------------------------------------------
+   Reusable visual primitives (consumed via className).
+--------------------------------------------------------------------------- */
+@layer components {
+  /* Frosted glass surface. */
+  .glass {
+    background: var(--glass-fill);
+    border: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    backdrop-filter: blur(var(--glass-blur));
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+      0 20px 60px -20px rgba(0, 0, 0, 0.35);
+  }
+
+  /* Phones: real-time backdrop blur over live video + animated canvases is
+     the single biggest mobile compositor cost (and a prime suspect for the
+     live-mode UI freeze). Swap it for a solid translucent fill — visually
+     close, orders of magnitude cheaper. */
+  @media (max-width: 640px), (pointer: coarse) {
+    .glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background: rgb(var(--bg-elevated) / 0.85);
+    }
+  }
+
+  /* Brand-gradient text. */
+  .text-brand-gradient {
+    background: linear-gradient(
+      135deg,
+      rgb(var(--grad-start)),
+      rgb(var(--grad-mid)),
+      rgb(var(--grad-end))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+@layer utilities {
+  /* A soft scrim behind text where nebula bleed hurts contrast. */
+  .text-scrim {
+    text-shadow: 0 1px 12px rgb(var(--bg-base) / 0.85);
+  }
+
+  /* Thin scrollbars used inside panels. */
+  .thin-scroll::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background: rgb(var(--contrast) / 0.14);
+    border-radius: 4px;
+  }
+}
+
 .transcript-scroll::-webkit-scrollbar {
   width: 4px;
 }
 .transcript-scroll::-webkit-scrollbar-thumb {
-  background: rgba(242, 237, 227, 0.18);
+  background: rgb(var(--contrast) / 0.18);
   border-radius: 4px;
 }
 
-/* Typing indicator dots in the text chat */
 @keyframes chatTyping {
-  0%, 60%, 100% {
+  0%,
+  60%,
+  100% {
     transform: translateY(0);
     opacity: 0.5;
   }
@@ -65,7 +226,33 @@ body::before {
   }
 }
 
-/* Reduced motion: turn animations into static states */
+/* Skeleton loading placeholder: a soft base with a sweeping highlight. Theme-
+   aware (uses --contrast) so it reads in both light and dark. */
+@keyframes skeletonSweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--contrast) / 0.06);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--contrast) / 0.1), transparent);
+  animation: skeletonSweep 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}
+
+/* Reduced motion: freeze animations to static states. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

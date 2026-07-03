@@ -48,7 +48,7 @@ function drawIcon(size) {
   const cx = size / 2;
   const cy = size / 2;
   // Keep the mark inside the maskable safe area (~80% of the canvas).
-  const orbR = size * 0.30;
+  const orbR = size * 0.3;
   const ringR = size * 0.345;
   const px = 1.5; // edge softness in pixels
 
@@ -63,8 +63,7 @@ function drawIcon(size) {
       const d = Math.hypot(x - cx, y - cy);
 
       // Outer cream glow ring.
-      const ringA =
-        smoothstep(ringR + px, ringR, d) * smoothstep(orbR - px, orbR, d) * 0.35;
+      const ringA = smoothstep(ringR + px, ringR, d) * smoothstep(orbR - px, orbR, d) * 0.35;
       if (ringA > 0) color = blend(color, CREAM_100, ringA);
 
       // The orb itself: radial signal gradient, anti-aliased rim.

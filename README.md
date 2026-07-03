@@ -54,36 +54,36 @@ microphone permission, and speak.
 
 ## Features
 
-| Area | Feature | Status |
-| --- | --- | --- |
-| Conversation | Three AI providers — Anthropic Claude, OpenAI, Google Gemini | ✅ |
-| Conversation | Secure server-side proxy (`/api/chat`) — keys never reach the browser | ✅ |
-| Conversation | Per-session history + `localStorage` memory (name, preferences, notes) | ✅ |
-| Conversation | Bounded context window (recent turns only) — caps cost & latency | ✅ |
-| Security | Rate limiting + same-origin guard on every API route | ✅ |
-| Input | Push-to-talk + click-to-toggle mic (Web Speech STT) | ✅ |
-| Input | **Hands-free mode** — keeps listening across pauses, re-opens mic after replies | ✅ |
-| Input | Text input fallback when mic is denied or unsupported | ✅ |
-| Avatar | **Live, lip-synced video avatar** via Simli (real-time WebRTC) | ✅ |
-| Avatar | Gemini text-to-speech drives the avatar's lips | ✅ |
-| Avatar | Graceful fallback to still image + browser `SpeechSynthesis` | ✅ |
-| Avatar | Toggle live video ↔ still image in Settings | ✅ |
-| Avatar | State-driven aura (idle / listening / thinking / speaking / error) | ✅ |
-| Avatar | Watchdog recovery — never gets stuck on "Thinking" if the stream stalls | ✅ |
-| Voice | **Streaming TTS** — audio plays as it's synthesized; first word in ~1s | ✅ |
-| UX | Barge-in: start talking and she stops mid-sentence | ✅ |
-| UX | **Captions** — show her spoken reply as on-screen text (accessibility) | ✅ |
-| UX | Offline banner + one-tap **Retry** on a failed turn | ✅ |
-| UX | Settings panel, collapsible transcript, error handling | ✅ |
-| Chat | WhatsApp-style text chat (bubbles, timestamps, typing indicator) | ✅ |
-| Chat | Shares the same history as the call; text-only (no voice) | ✅ |
-| PWA | Installable, standalone, offline app-shell caching, app icons | ✅ |
-| Mobile | Responsive with safe-area insets, `dvh` sizing, keyboard-aware chat | ✅ |
-| Vision | **Mira Vision** — camera sight, describe scenes, teach/recognize objects | ✅ |
-| Vision | Opt-in known-person enrollment (consent-gated); strangers never identified | ✅ |
-| Vision | Local visual memory (IndexedDB), managed in Settings | ✅ |
-| Vision | **Live Vision Conversation** — voice-first; auto-captures only when asked | ✅ |
-| Vision | Image-to-image recognition — saved thumbnails are compared directly | ✅ |
+| Area         | Feature                                                                         | Status |
+| ------------ | ------------------------------------------------------------------------------- | ------ |
+| Conversation | Three AI providers — Anthropic Claude, OpenAI, Google Gemini                    | ✅     |
+| Conversation | Secure server-side proxy (`/api/chat`) — keys never reach the browser           | ✅     |
+| Conversation | Per-session history + `localStorage` memory (name, preferences, notes)          | ✅     |
+| Conversation | Bounded context window (recent turns only) — caps cost & latency                | ✅     |
+| Security     | Rate limiting + same-origin guard on every API route                            | ✅     |
+| Input        | Push-to-talk + click-to-toggle mic (Web Speech STT)                             | ✅     |
+| Input        | **Hands-free mode** — keeps listening across pauses, re-opens mic after replies | ✅     |
+| Input        | Text input fallback when mic is denied or unsupported                           | ✅     |
+| Avatar       | **Live, lip-synced video avatar** via Simli (real-time WebRTC)                  | ✅     |
+| Avatar       | Gemini text-to-speech drives the avatar's lips                                  | ✅     |
+| Avatar       | Graceful fallback to still image + browser `SpeechSynthesis`                    | ✅     |
+| Avatar       | Toggle live video ↔ still image in Settings                                     | ✅     |
+| Avatar       | State-driven aura (idle / listening / thinking / speaking / error)              | ✅     |
+| Avatar       | Watchdog recovery — never gets stuck on "Thinking" if the stream stalls         | ✅     |
+| Voice        | **Streaming TTS** — audio plays as it's synthesized; first word in ~1s          | ✅     |
+| UX           | Barge-in: start talking and she stops mid-sentence                              | ✅     |
+| UX           | **Captions** — show her spoken reply as on-screen text (accessibility)          | ✅     |
+| UX           | Offline banner + one-tap **Retry** on a failed turn                             | ✅     |
+| UX           | Settings panel, collapsible transcript, error handling                          | ✅     |
+| Chat         | WhatsApp-style text chat (bubbles, timestamps, typing indicator)                | ✅     |
+| Chat         | Shares the same history as the call; text-only (no voice)                       | ✅     |
+| PWA          | Installable, standalone, offline app-shell caching, app icons                   | ✅     |
+| Mobile       | Responsive with safe-area insets, `dvh` sizing, keyboard-aware chat             | ✅     |
+| Vision       | **Mira Vision** — camera sight, describe scenes, teach/recognize objects        | ✅     |
+| Vision       | Opt-in known-person enrollment (consent-gated); strangers never identified      | ✅     |
+| Vision       | Local visual memory (IndexedDB), managed in Settings                            | ✅     |
+| Vision       | **Live Vision Conversation** — voice-first; auto-captures only when asked       | ✅     |
+| Vision       | Image-to-image recognition — saved thumbnails are compared directly             | ✅     |
 
 ---
 
@@ -159,16 +159,16 @@ video is ever stored — only thumbnails you capture, in your browser's IndexedD
 
 ### Graceful degradation (nothing hard-fails)
 
-| If this is missing / fails… | …the app does this instead |
-| --- | --- |
-| Chosen AI provider key | Falls back to any other configured provider, then demo mode |
-| Deepgram TTS | Falls back to Gemini TTS, then the browser voice |
-| Simli (live avatar) | Falls back to still image + browser/Web-Audio voice |
-| Live stream stalls | Watchdog recovers to the browser voice |
-| Camera / mic denied | Voice/vision disabled gracefully; text chat still works |
-| Network offline | Offline banner + one-tap Retry on the failed turn |
-| Upstash Redis | Falls back to the in-memory rate limiter |
-| Web Speech API (e.g. Firefox) | Use the text chat / text input |
+| If this is missing / fails…   | …the app does this instead                                  |
+| ----------------------------- | ----------------------------------------------------------- |
+| Chosen AI provider key        | Falls back to any other configured provider, then demo mode |
+| Deepgram TTS                  | Falls back to Gemini TTS, then the browser voice            |
+| Simli (live avatar)           | Falls back to still image + browser/Web-Audio voice         |
+| Live stream stalls            | Watchdog recovers to the browser voice                      |
+| Camera / mic denied           | Voice/vision disabled gracefully; text chat still works     |
+| Network offline               | Offline banner + one-tap Retry on the failed turn           |
+| Upstash Redis                 | Falls back to the in-memory rate limiter                    |
+| Web Speech API (e.g. Firefox) | Use the text chat / text input                              |
 
 ---
 
@@ -183,11 +183,11 @@ replies so you can review the UI before signing up for anything.
 Set `AI_PROVIDER` to `anthropic`, `openai`, or `google`, then provide the
 matching key:
 
-| Provider | Key | Model var (default) | Get a key |
-| --- | --- | --- | --- |
-| Anthropic Claude | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (`claude-sonnet-4-6`) | <https://console.anthropic.com/> |
-| OpenAI | `OPENAI_API_KEY` | `OPENAI_MODEL` (`gpt-4o-mini`) | <https://platform.openai.com/> |
-| Google AI Studio | `GOOGLE_API_KEY` | `GOOGLE_MODEL` (`gemini-2.0-flash`) | <https://aistudio.google.com/app/apikey> |
+| Provider         | Key                 | Model var (default)                     | Get a key                                |
+| ---------------- | ------------------- | --------------------------------------- | ---------------------------------------- |
+| Anthropic Claude | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (`claude-sonnet-4-6`) | <https://console.anthropic.com/>         |
+| OpenAI           | `OPENAI_API_KEY`    | `OPENAI_MODEL` (`gpt-4o-mini`)          | <https://platform.openai.com/>           |
+| Google AI Studio | `GOOGLE_API_KEY`    | `GOOGLE_MODEL` (`gemini-2.0-flash`)     | <https://aistudio.google.com/app/apikey> |
 
 If the chosen provider's key is missing, the app falls back to any other
 configured provider, and finally to demo mode.
@@ -197,12 +197,12 @@ configured provider, and finally to demo mode.
 To turn the avatar into a real-time lip-synced video, add a
 [Simli](https://app.simli.com/) account's credentials:
 
-| Var | Purpose |
-| --- | --- |
-| `SIMLI_API_KEY` | Your Simli API key (server-side only) |
-| `SIMLI_FACE_ID` | The face to render (from the Simli dashboard) |
+| Var                | Purpose                                                                   |
+| ------------------ | ------------------------------------------------------------------------- |
+| `SIMLI_API_KEY`    | Your Simli API key (server-side only)                                     |
+| `SIMLI_FACE_ID`    | The face to render (from the Simli dashboard)                             |
 | `GEMINI_TTS_MODEL` | TTS model that voices the avatar (default `gemini-2.5-flash-preview-tts`) |
-| `GEMINI_TTS_VOICE` | Voice name — e.g. `Kore`, `Aoede`, `Puck`, `Charon`, `Leda`, `Zephyr` |
+| `GEMINI_TTS_VOICE` | Voice name — e.g. `Kore`, `Aoede`, `Puck`, `Charon`, `Leda`, `Zephyr`     |
 
 The avatar's voice reuses your **`GOOGLE_API_KEY`** for TTS, so no extra key is
 needed beyond Simli. When `SIMLI_API_KEY` / `SIMLI_FACE_ID` are absent, the live
@@ -258,9 +258,9 @@ set both env vars, the guard uses a **distributed** limiter
 ([@upstash/ratelimit](https://github.com/upstash/ratelimit-js) + Redis) shared
 by all instances:
 
-| Var | Purpose |
-| --- | --- |
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
+| Var                        | Purpose                  |
+| -------------------------- | ------------------------ |
+| `UPSTASH_REDIS_REST_URL`   | Upstash Redis REST URL   |
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
 
 ```bash
@@ -343,25 +343,25 @@ ai-avatar-companion/
 
 ## Controls
 
-| Action | How |
-| --- | --- |
-| Start / stop listening | Click the mic button (or hold it in push-to-talk mode) |
-| Stop her mid-sentence | "Stop" button next to the mic while she's speaking (or just start talking — barge-in) |
-| Open the text chat | Chat icon (top right) — back arrow returns to the call |
-| Type instead of speaking | Text chat, or the quick text input below the mic |
-| Show transcript | "Show" button next to the mic, or expand from the right edge |
-| Switch live video ↔ still image | Gear icon → **Avatar** (only shown when Simli is configured) |
-| Hands-free conversation | Settings → **Hands-free** — mic stays open across pauses and re-opens after each reply |
-| Show captions | Settings → **Captions** — her spoken reply appears on screen |
-| Retry a failed turn | "Retry" button under the avatar after a connection error |
-| Change name / voice / volume / mic mode | Gear icon top right |
-| Reset everything | Settings → "Reset conversation & memory" |
+| Action                                  | How                                                                                    |
+| --------------------------------------- | -------------------------------------------------------------------------------------- |
+| Start / stop listening                  | Click the mic button (or hold it in push-to-talk mode)                                 |
+| Stop her mid-sentence                   | "Stop" button next to the mic while she's speaking (or just start talking — barge-in)  |
+| Open the text chat                      | Chat icon (top right) — back arrow returns to the call                                 |
+| Type instead of speaking                | Text chat, or the quick text input below the mic                                       |
+| Show transcript                         | "Show" button next to the mic, or expand from the right edge                           |
+| Switch live video ↔ still image         | Gear icon → **Avatar** (only shown when Simli is configured)                           |
+| Hands-free conversation                 | Settings → **Hands-free** — mic stays open across pauses and re-opens after each reply |
+| Show captions                           | Settings → **Captions** — her spoken reply appears on screen                           |
+| Retry a failed turn                     | "Retry" button under the avatar after a connection error                               |
+| Change name / voice / volume / mic mode | Gear icon top right                                                                    |
+| Reset everything                        | Settings → "Reset conversation & memory"                                               |
 
 ### Two ways to talk
 
 - **Call mode** (default) — voice-first: speak and hear her reply, with the live
   (or fallback) avatar reacting on screen.
-- **Chat mode** — a quiet, WhatsApp-style text conversation over the *same*
+- **Chat mode** — a quiet, WhatsApp-style text conversation over the _same_
   history. Text-only, so no audio plays. Opening chat also drops the live
   avatar stream so it isn't billing in the background.
 
@@ -402,7 +402,7 @@ next time. The manual buttons are still there as a fallback:
 - **Look** — capture a frame; Mira describes the scene and names any learned
   object she recognizes ("That looks like your guitar.").
 - **Teach object** — capture → label + notes → saved to local visual memory.
-- **Teach person** — *opt-in, consent-gated.* Confirm permission, capture 3
+- **Teach person** — _opt-in, consent-gated._ Confirm permission, capture 3
   angles, add a name/context.
 - **Close camera** — stops the stream immediately.
 
@@ -432,9 +432,9 @@ Examples:
   on your confirmation.
 - "Forget my keyboard." → deletes that memory.
 
-Toggles in **Settings → Mira Vision**: *Live Vision conversation*,
-*Auto-capture for vision questions*, *Known-person recognition* (off by
-default), and *Ask before saving a person* (always on).
+Toggles in **Settings → Mira Vision**: _Live Vision conversation_,
+_Auto-capture for vision questions_, _Known-person recognition_ (off by
+default), and _Ask before saving a person_ (always on).
 
 ### How matching works
 
@@ -450,7 +450,7 @@ multimodal embeddings for even more robust matching.
 
 - The camera **never starts automatically** — only after you tap to open it, and
   a red "Camera on" indicator is shown while it's live.
-- **No video is persisted.** Only still thumbnails *you* capture are saved, in
+- **No video is persisted.** Only still thumbnails _you_ capture are saved, in
   your browser's IndexedDB (managed in **Settings → Mira Vision → Manage visual
   memories**: view, rename, delete, export/import JSON).
 - **Strangers are never identified.** Person recognition is **off by default**
@@ -465,14 +465,14 @@ multimodal embeddings for even more robust matching.
 ## Permissions on mobile / PWA
 
 Mira uses one **centralized permission setup**: on first run a card asks to
-enable camera + microphone *together* (one `getUserMedia({ audio, video })`),
+enable camera + microphone _together_ (one `getUserMedia({ audio, video })`),
 then immediately stops the tracks so nothing stays active. The grant is shared
 by every feature (voice + Mira Vision), so you're asked once rather than per
 module. The app remembers it was initialized (localStorage) and won't show the
 card again once granted.
 
 > Mira **cannot** bypass the browser/OS prompt — final control always stays with
-> your browser. The manager only unifies *when* you're asked.
+> your browser. The manager only unifies _when_ you're asked.
 
 If the browser keeps re-prompting on mobile:
 

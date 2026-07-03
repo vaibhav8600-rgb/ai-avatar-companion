@@ -16,10 +16,30 @@ export interface TtsModelOption {
 }
 
 export const TTS_MODEL_OPTIONS: TtsModelOption[] = [
-  { id: "", label: "Auto (recommended)", hint: "Picks the best available, with fallback", kind: "tts" },
-  { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS", hint: "Fast, reliable", kind: "tts" },
-  { id: "gemini-3.1-flash-tts-preview", label: "Gemini 3.1 Flash TTS", hint: "Newer preview", kind: "tts" },
-  { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS", hint: "Higher quality", kind: "tts" },
+  {
+    id: "",
+    label: "Auto (recommended)",
+    hint: "Picks the best available, with fallback",
+    kind: "tts",
+  },
+  {
+    id: "gemini-2.5-flash-preview-tts",
+    label: "Gemini 2.5 Flash TTS",
+    hint: "Fast, reliable",
+    kind: "tts",
+  },
+  {
+    id: "gemini-3.1-flash-tts-preview",
+    label: "Gemini 3.1 Flash TTS",
+    hint: "Newer preview",
+    kind: "tts",
+  },
+  {
+    id: "gemini-2.5-pro-preview-tts",
+    label: "Gemini 2.5 Pro TTS",
+    hint: "Higher quality",
+    kind: "tts",
+  },
   {
     id: "gemini-2.5-flash-preview-native-audio-dialog",
     label: "Gemini 2.5 Flash Native Audio (Live)",

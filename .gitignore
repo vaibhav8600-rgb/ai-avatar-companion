@@ -3,6 +3,10 @@ node_modules/
 out/
 dist/
 build/
+# Root-only: the design mockups folder. Anchored with a leading slash so it
+# does NOT also ignore source dirs named "design" (e.g. lib/design/tokens.ts,
+# which broke the Vercel/Linux build when it was excluded from the commit).
+/design/
 
 # env
 .env

@@ -1,0 +1,14 @@
+# Build output & deps
+.next/
+node_modules/
+out/
+coverage/
+
+# Generated / vendored
+public/service-worker.js
+tsconfig.tsbuildinfo
+package-lock.json
+next-env.d.ts
+
+# Docs & mockups (leave formatting/line-wrapping as authored)
+design/

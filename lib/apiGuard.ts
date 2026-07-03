@@ -76,8 +76,7 @@ function allowedOrigin(req: NextRequest): boolean {
 // ----- distributed limiter (Upstash Redis) -----
 
 const upstashConfigured =
-  Boolean(process.env.UPSTASH_REDIS_REST_URL) &&
-  Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
+  Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
 
 // Singletons reused across warm invocations (avoid reconnecting per request).
 let redis: Redis | null = null;

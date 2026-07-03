@@ -44,27 +44,25 @@ export default function MicButton({
       className={`
         relative grid place-items-center
         h-16 w-16 sm:h-[72px] sm:w-[72px]
-        rounded-full
-        transition-all duration-300
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-signal-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-900
-        disabled:opacity-40 disabled:cursor-not-allowed
-        ${isActive
-          ? "bg-signal-500 text-ink-900 shadow-[0_0_40px_-5px_rgba(125,179,216,0.6)]"
-          : "bg-white/[0.05] text-cream-100 hover:bg-white/[0.08] border border-white/[0.08]"
-        }
+        rounded-full text-onbrand
+        transition-transform duration-300
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-violet/70 focus-visible:ring-offset-2 focus-visible:ring-offset-cosmic-base
+        disabled:cursor-not-allowed disabled:opacity-40
       `}
       {...handlers}
     >
-      {isActive && (
-        <span
-          className="absolute inset-0 rounded-full"
-          style={{
-            background: "radial-gradient(circle, rgba(125,179,216,0.4), transparent 70%)",
-            animation: "pulse 1.6s ease-in-out infinite",
-          }}
-          aria-hidden
-        />
-      )}
+      {/* Pulsing outer glow. */}
+      <span
+        aria-hidden
+        className={`absolute inset-0 rounded-full blur-lg ${
+          isActive ? "bg-status-listen/60 animate-pulse-slow" : "bg-brand-gradient opacity-50"
+        }`}
+      />
+      {/* Face. */}
+      <span
+        aria-hidden
+        className={`absolute inset-0 rounded-full ${isActive ? "bg-status-listen" : "bg-brand-gradient"}`}
+      />
       <MicIcon active={isActive} />
     </button>
   );

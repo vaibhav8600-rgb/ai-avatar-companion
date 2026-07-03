@@ -86,7 +86,10 @@ export async function listMemories(): Promise<VisualMemory[]> {
 
 export async function getMemory(id: string): Promise<VisualMemory | undefined> {
   if (!hasIndexedDB()) return undefined;
-  return tx<VisualMemory | undefined>("readonly", (s) => s.get(id) as IDBRequest<VisualMemory | undefined>);
+  return tx<VisualMemory | undefined>(
+    "readonly",
+    (s) => s.get(id) as IDBRequest<VisualMemory | undefined>,
+  );
 }
 
 export async function searchMemories(query: string): Promise<VisualMemory[]> {

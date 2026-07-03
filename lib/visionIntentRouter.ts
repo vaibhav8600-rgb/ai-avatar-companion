@@ -27,22 +27,32 @@ export interface VisionIntentResult {
  * ("your office laptop") is derived separately when Mira replies.
  */
 function cleanLabel(raw: string): string {
-  let s = raw.trim().replace(/[.?!,]+$/g, "").trim();
+  let s = raw
+    .trim()
+    .replace(/[.?!,]+$/g, "")
+    .trim();
   s = s.replace(/\b(please|now|for me)\b\.?$/i, "").trim();
   // Only drop a leading article (a/an/the), not the possessive "my".
   s = s.replace(/^(a|an|the)\s+/i, "").trim();
   return s;
 }
 
-const PERSON_HINT = /\b(person|people|him|her|them|guy|man|woman|friend|wife|husband|brother|sister|colleague|mother|father|mom|dad|son|daughter)\b/i;
+const PERSON_HINT =
+  /\b(person|people|him|her|them|guy|man|woman|friend|wife|husband|brother|sister|colleague|mother|father|mom|dad|son|daughter)\b/i;
 
 export function detectVisionIntent(transcript: string): VisionIntentResult {
   const text = transcript.trim();
   const t = text.toLowerCase();
 
   // 1) Forget / delete a memory.
-  if (/\b(forget|delete|remove)\b/.test(t) && /\b(this|that|object|person|memory|it|my|him|her)\b/.test(t)) {
-    const m = /\b(?:forget|delete|remove)\s+(?:this\s+|that\s+|my\s+)?(?:object\s+|person\s+|memory\s+(?:of\s+)?)?(.+)/i.exec(text);
+  if (
+    /\b(forget|delete|remove)\b/.test(t) &&
+    /\b(this|that|object|person|memory|it|my|him|her)\b/.test(t)
+  ) {
+    const m =
+      /\b(?:forget|delete|remove)\s+(?:this\s+|that\s+|my\s+)?(?:object\s+|person\s+|memory\s+(?:of\s+)?)?(.+)/i.exec(
+        text,
+      );
     const label = m && m[1] ? cleanLabel(m[1]) : undefined;
     const targetType = PERSON_HINT.test(t) ? "person" : "object";
     return { intent: "forget_visual_memory", label, targetType, needsCamera: false };
@@ -85,15 +95,17 @@ export function detectVisionIntent(transcript: string): VisionIntentResult {
     /\bwho('?s| is| was)?\b.*\b(this|that|he|she|him|her)\b/.test(t) ||
     /\bwho is this\b|\bwho am i looking at\b/.test(t) ||
     /\bdo you (know|recognize)\b.*\b(him|her|them|this person)\b/.test(t) ||
-    /\bis this\b.+\?$/.test(t) && PERSON_HINT.test(t)
+    (/\bis this\b.+\?$/.test(t) && PERSON_HINT.test(t))
   ) {
     return { intent: "recognize_known_person", targetType: "person", needsCamera: true };
   }
 
   // 5) Recognize / identify the current OBJECT view.
   if (
-    /\bdo you remember this\b|\bhave you seen this\b|\bwhat is this\b|\bwhats this\b|\bwhich object\b|\bdo you recognize this\b/.test(t) ||
-    (/\bis this my\b/.test(t))
+    /\bdo you remember this\b|\bhave you seen this\b|\bwhat is this\b|\bwhats this\b|\bwhich object\b|\bdo you recognize this\b/.test(
+      t,
+    ) ||
+    /\bis this my\b/.test(t)
   ) {
     return { intent: "recognize_current_view", targetType: "object", needsCamera: true };
   }
@@ -144,7 +156,10 @@ function extractPersonName(text: string): string | undefined {
   for (const re of patterns) {
     const m = re.exec(text);
     if (m && m[1]) {
-      const name = m[1].replace(/,?\s*(?:remember|save|enroll)\b.*$/i, "").replace(/[.?!,]+$/g, "").trim();
+      const name = m[1]
+        .replace(/,?\s*(?:remember|save|enroll)\b.*$/i, "")
+        .replace(/[.?!,]+$/g, "")
+        .trim();
       if (name && !PERSON_HINT.test(name.toLowerCase())) return name;
     }
   }
