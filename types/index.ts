@@ -1,18 +1,18 @@
 // Shared types for the AI Avatar Companion.
 
 export type AvatarState =
-  | "idle"        // waiting, calm
-  | "listening"   // mic is open, user is speaking
-  | "thinking"    // request sent to AI, waiting for reply
-  | "speaking"    // playing AI's voice reply
-  | "error"       // something went wrong / offline
-  | "muted"       // mic explicitly muted by user
+  | "idle" // waiting, calm
+  | "listening" // mic is open, user is speaking
+  | "thinking" // request sent to AI, waiting for reply
+  | "speaking" // playing AI's voice reply
+  | "error" // something went wrong / offline
+  | "muted" // mic explicitly muted by user
   // ----- Mira Vision states -----
-  | "looking"     // camera frame captured, analyzing the scene
-  | "learning"    // teaching Mira an object/person
+  | "looking" // camera frame captured, analyzing the scene
+  | "learning" // teaching Mira an object/person
   | "recognizing" // comparing a frame against learned memories
-  | "recognized"  // a confident match was found
-  | "uncertain";  // saw something familiar but not sure
+  | "recognized" // a confident match was found
+  | "uncertain"; // saw something familiar but not sure
 
 export type Role = "user" | "assistant";
 
@@ -22,6 +22,12 @@ export interface ChatMessage {
   content: string;
   /** ISO timestamp */
   timestamp: string;
+  /**
+   * Optional image attachment (data URL) shared by the user in the text chat.
+   * Rendered inline in the bubble; also analyzed via Mira Vision so her reply
+   * can reference what's in the picture.
+   */
+  imageBase64?: string;
 }
 
 /** Persisted user-level memory (localStorage). */

@@ -120,20 +120,14 @@ export function matchMemory(
   // Strong signal: the model compared images and named a matching label.
   if (result.matchedLabel) {
     const wanted = result.matchedLabel.toLowerCase();
-    const hit = memories.find(
-      (m) => m.type === type && m.label.toLowerCase() === wanted,
-    );
+    const hit = memories.find((m) => m.type === type && m.label.toLowerCase() === wanted);
     if (hit) {
       // Floor the confidence so a direct visual match clears the 0.6 gate.
       return { memory: hit, confidence: Math.max(result.confidence || 0.6, 0.7) };
     }
   }
 
-  const haystack = (
-    result.description +
-    " " +
-    result.objects.join(" ")
-  ).toLowerCase();
+  const haystack = (result.description + " " + result.objects.join(" ")).toLowerCase();
 
   let best: MemoryMatch | null = null;
   for (const m of memories) {

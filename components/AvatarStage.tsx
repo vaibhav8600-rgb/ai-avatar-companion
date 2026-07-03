@@ -1,7 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useState, type MutableRefObject, type RefObject } from "react";
+import AvatarOrb from "@/components/AvatarOrb";
+import Skeleton from "@/components/ui/Skeleton";
 import type { AvatarState } from "@/types";
 
 interface AvatarStageProps {
@@ -11,177 +13,61 @@ interface AvatarStageProps {
   /** Refs for the live Simli video/audio stream (when enabled). */
   videoRef?: RefObject<HTMLVideoElement>;
   audioRef?: RefObject<HTMLAudioElement>;
-  /**
-   * True when live mode is engaged and the stream is connecting or ready.
-   * We show a loader until the video actually starts playing, then reveal it.
-   */
+  /** True when live mode is engaged and the stream is connecting or ready. */
   liveActive?: boolean;
+  /** Smoothed 0..1 audio amplitude, drives the orb pulse. */
+  levelRef?: MutableRefObject<number>;
 }
 
 /**
- * The center of the experience. When the live avatar is connected, a real
- * lip-synced video plays here. Otherwise it falls back to the static image.
- * Either way the aura ring (color + animation) reflects listening / thinking
- * / speaking state. The fake "mouth pulse" is only used in image mode, since
- * the video already has real lip movement.
+ * The center of the experience: Mira's portrait framed by the animated
+ * AvatarOrb (ring + particles, state- and audio-reactive). When the live
+ * avatar is connected, a real lip-synced video plays inside the ring;
+ * otherwise the static image is shown.
  */
 export default function AvatarStage({
   state,
-  interimText,
   videoRef,
   audioRef,
   liveActive = false,
+  levelRef,
 }: AvatarStageProps) {
   const isSpeaking = state === "speaking";
-  const isListening = state === "listening";
-  const isThinking = state === "thinking";
-  const isError = state === "error";
-  // Mira Vision states share a "scanning" aura — signal-blue while looking /
-  // recognizing, warm while learning or unsure.
-  const isVisionActive = state === "looking" || state === "recognizing";
-  const isVisionWarm = state === "learning" || state === "uncertain";
-  const isRecognized = state === "recognized";
 
-  // Track whether the live video is actually rendering frames, so we can keep a
-  // loader up until her face is really on screen (not just "connected").
   const [videoPlaying, setVideoPlaying] = useState(false);
+  const [portraitLoaded, setPortraitLoaded] = useState(false);
   useEffect(() => {
     if (!liveActive) setVideoPlaying(false);
   }, [liveActive]);
 
+  // Responsive orb size. The ring layer draws ~28% wider than the orb, so the
+  // orb is sized to keep ring + orb inside even an iPhone SE viewport (375px).
+  const [size, setSize] = useState(340);
+  useEffect(() => {
+    const set = () => {
+      const w = window.innerWidth;
+      setSize(w < 400 ? 228 : w < 640 ? 264 : w < 1024 ? 320 : 360);
+    };
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, []);
+
   const showVideo = liveActive && videoPlaying;
   const showLoader = liveActive && !videoPlaying;
+  const portrait = Math.round(size * 0.82);
 
   return (
     <div className="relative flex flex-col items-center justify-center">
-      {/* Aura layer — multiple stacked rings for depth */}
-      <div className="relative">
-        {/* Base ambient breath (always on, very subtle) */}
+      <AvatarOrb state={state} levelRef={levelRef} size={size}>
         <div
-          className="aura-ring is-active"
-          style={{
-            background:
-              "radial-gradient(circle, rgba(125,179,216,0.18), transparent 70%)",
-            animation: "breathe 6s ease-in-out infinite",
-          }}
-          aria-hidden
-        />
-
-        {/* Listening — blue ripple */}
-        {isListening && (
-          <>
-            <div
-              className="aura-ring is-active"
-              style={{
-                background:
-                  "radial-gradient(circle, rgba(125,179,216,0.45), transparent 65%)",
-                animation: "ripple 1.6s ease-out infinite",
-              }}
-              aria-hidden
-            />
-            <div
-              className="aura-ring is-active"
-              style={{
-                background:
-                  "radial-gradient(circle, rgba(125,179,216,0.30), transparent 65%)",
-                animation: "ripple 1.6s ease-out 0.4s infinite",
-              }}
-              aria-hidden
-            />
-          </>
-        )}
-
-        {/* Thinking — soft shimmer */}
-        {isThinking && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "conic-gradient(from 0deg, rgba(125,179,216,0.3), rgba(217,169,100,0.2), rgba(125,179,216,0.3))",
-              animation: "spin 4s linear infinite, shimmer 2.4s ease-in-out infinite",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* Speaking — warm pulsing glow */}
-        {isSpeaking && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(232,192,136,0.45), transparent 65%)",
-              animation: "pulse 1.2s ease-in-out infinite",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* Error — muted red */}
-        {isError && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(220,90,90,0.35), transparent 65%)",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* Mira Vision — scanning shimmer (signal blue) */}
-        {isVisionActive && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "conic-gradient(from 0deg, rgba(125,179,216,0.4), rgba(163,208,236,0.15), rgba(125,179,216,0.4))",
-              animation: "spin 3s linear infinite, shimmer 1.8s ease-in-out infinite",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* Learning / uncertain — warm shimmer */}
-        {isVisionWarm && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(232,192,136,0.38), transparent 65%)",
-              animation: "shimmer 2s ease-in-out infinite",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* Recognized — confident signal pulse */}
-        {isRecognized && (
-          <div
-            className="aura-ring is-active"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(125,179,216,0.5), transparent 60%)",
-              animation: "pulse 1s ease-in-out infinite",
-            }}
-            aria-hidden
-          />
-        )}
-
-        {/* The avatar image itself, in a soft-rounded frame */}
-        <div
-          className={`
-            relative overflow-hidden
-            rounded-[2rem] border border-white/5
-            shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)]
-            w-[232px] h-[290px] sm:w-[320px] sm:h-[400px] md:w-[360px] md:h-[460px]
-            transition-transform duration-700
-            ${isSpeaking ? "scale-[1.015]" : "scale-100"}
-          `}
+          className={`relative overflow-hidden rounded-full transition-transform duration-700 ${
+            isSpeaking ? "scale-[1.015]" : "scale-100"
+          }`}
+          style={{ width: portrait, height: portrait }}
         >
-          {/* Live lip-synced video (only mounted when Simli is wired up).
-              Kept in the DOM whenever a ref exists so it can receive the
-              WebRTC track; we just fade it in once it's actually streaming. */}
+          {/* Live lip-synced video — kept mounted whenever a ref exists so it can
+              receive the WebRTC track; faded in once actually streaming. */}
           {videoRef && (
             <video
               ref={videoRef}
@@ -190,6 +76,10 @@ export default function AvatarStage({
               muted
               onPlaying={() => setVideoPlaying(true)}
               onLoadedData={() => setVideoPlaying(true)}
+              // If the WebRTC track drops (connection lost, session ended),
+              // fall back to the still portrait instead of a black frame.
+              onEmptied={() => setVideoPlaying(false)}
+              onEnded={() => setVideoPlaying(false)}
               className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
                 showVideo ? "opacity-100" : "opacity-0"
               }`}
@@ -197,77 +87,53 @@ export default function AvatarStage({
           )}
           {audioRef && <audio ref={audioRef} autoPlay className="hidden" />}
 
-          {/* Static image — shown until the live video is streaming. */}
           {!showVideo && (
-            <Image
-              src="/avatar.png"
-              alt="AI avatar"
-              fill
-              priority
-              sizes="(max-width: 768px) 320px, 360px"
-              className="object-cover"
-            />
+            <>
+              {!portraitLoaded && <Skeleton rounded="rounded-none" className="absolute inset-0" />}
+              <Image
+                src="/avatar.png"
+                alt="Mira avatar"
+                fill
+                priority
+                sizes="(max-width: 640px) 264px, 360px"
+                onLoad={() => setPortraitLoaded(true)}
+                className={`object-cover transition-opacity duration-500 ${portraitLoaded ? "opacity-100" : "opacity-0"}`}
+              />
+            </>
           )}
 
-          {/* Live-mode loader — overlays the image until her face is on screen. */}
           {showLoader && (
-            <div className="absolute inset-0 grid place-items-center bg-ink-900/55 backdrop-blur-sm animate-fade-up">
+            <div className="absolute inset-0 grid place-items-center bg-cosmic-base/55 backdrop-blur-sm animate-fade-up">
               <div className="flex flex-col items-center gap-3">
-                <div className="h-10 w-10 rounded-full border-2 border-white/15 border-t-signal-400 animate-spin" />
-                <p className="text-[11px] uppercase tracking-[0.18em] text-cream-100/60">
+                <div className="h-10 w-10 rounded-full border-2 border-white/15 border-t-accent-cyan animate-spin" />
+                <p className="text-[11px] uppercase tracking-[0.18em] text-ink-secondary">
                   Waking her up…
                 </p>
               </div>
             </div>
           )}
 
-          {/* Subtle vignette */}
+          {/* Bottom vignette to blend the portrait into the cosmic backdrop. */}
           <div
-            className="absolute inset-0 pointer-events-none"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
-                "linear-gradient(180deg, transparent 60%, rgba(14,15,19,0.55) 100%)",
+                "linear-gradient(180deg, transparent 55%, rgb(var(--bg-base) / 0.65) 100%)",
             }}
             aria-hidden
           />
-
-          {/* Mouth-area highlight that softly pulses while speaking
-              — a cheap stand-in for lip-sync, only in static-image mode. */}
-          {isSpeaking && !showVideo && (
-            <div
-              className="absolute"
-              style={{
-                left: "50%",
-                top: "62%",
-                width: "60px",
-                height: "20px",
-                transform: "translate(-50%, -50%)",
-                borderRadius: "50%",
-                background:
-                  "radial-gradient(circle, rgba(232,192,136,0.25), transparent 70%)",
-                animation: "pulse 0.4s ease-in-out infinite",
-                filter: "blur(8px)",
-              }}
-              aria-hidden
-            />
-          )}
         </div>
-      </div>
+      </AvatarOrb>
 
-      {/* Interim transcript shown below avatar while listening */}
-      {isListening && interimText && (
-        <div className="mt-6 px-4 py-2 max-w-md text-center text-cream-100/70 text-sm italic animate-fade-up">
-          “{interimText}”
-        </div>
-      )}
-
-      <style jsx>{`
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      `}</style>
+      {/* Floor reflection — soft glow pooling under the orb, like the mockups'
+          reflective cosmic ground. */}
+      <div
+        aria-hidden
+        className="decor-layer pointer-events-none -mt-4 h-8 w-3/5 rounded-[100%] bg-accent-violet/25 blur-2xl"
+      />
+      {/* NOTE: the live interim transcript is shown ONLY by the CaptionBar
+          under the mic ("You: …"). We intentionally do NOT repeat it here —
+          it used to appear in two places at once. */}
     </div>
   );
 }

@@ -57,7 +57,9 @@ const scheduledSources = new Set<AudioBufferSourceNode>();
 
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
-  const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const AC =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return null;
   if (!audioCtx) audioCtx = new AC();
   return audioCtx;
@@ -65,7 +67,10 @@ function getCtx(): AudioContext | null {
 
 export function isTtsAudioSupported(): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean(window.AudioContext || (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext);
+  return Boolean(
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext,
+  );
 }
 
 /** Create/resume the AudioContext within a user gesture (mobile autoplay). */
@@ -134,7 +139,10 @@ function pcmToBuffer(ctx: AudioContext, audioBase64: string, sampleRate: number)
 async function decodeToAudioBuffer(ctx: AudioContext, r: TtsAudioResult): Promise<AudioBuffer> {
   if (r.format === "mp3") {
     const bytes = base64ToUint8(r.audioBase64);
-    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const ab = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
     return ctx.decodeAudioData(ab);
   }
   return pcmToBuffer(ctx, r.audioBase64, r.sampleRate || 24000);

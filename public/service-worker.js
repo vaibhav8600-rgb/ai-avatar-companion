@@ -8,7 +8,7 @@
 //
 // Bump CACHE_VERSION to invalidate old caches on the next activation.
 
-const CACHE_VERSION = "aac-v2";
+const CACHE_VERSION = "aac-v4";
 const PRECACHE = [
   "/",
   "/manifest.webmanifest",
@@ -47,6 +47,38 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/")) return;
 
+  // Never touch dev / HMR traffic. If this worker is ever left controlling a
+  // `next dev` server (e.g. after testing a prod build on the same origin),
+  // intercepting these was the source of "ChunkLoadError: Loading chunk failed
+  // (timeout)". Pass them straight to the network — no cache, no interception.
+  if (
+    url.search.includes("v=") ||               // webpack dev cache-busting (?v=…)
+    url.pathname.includes("hot-update") ||      // HMR patches
+    url.pathname.startsWith("/_next/webpack-hmr") ||
+    url.pathname.startsWith("/__nextjs")
+  ) {
+    return;
+  }
+
+  // Immutable, content-hashed build assets → cache-first (fast, and the hash in
+  // the URL guarantees the bytes are correct, so a cached copy is never stale).
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(
+      caches.match(request).then(
+        (cached) =>
+          cached ||
+          fetch(request).then((response) => {
+            if (response && response.status === 200) {
+              const copy = response.clone();
+              caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy));
+            }
+            return response;
+          }),
+      ),
+    );
+    return;
+  }
+
   // App navigations: network-first with an offline fallback to the shell.
   if (request.mode === "navigate") {
     event.respondWith(
@@ -61,7 +93,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: stale-while-revalidate.
+  // Other static assets (icons, avatar, manifest): stale-while-revalidate.
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)

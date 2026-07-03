@@ -66,7 +66,10 @@ export async function decodeCompressedToSimliPcm(
 ): Promise<Uint8Array> {
   const bytes = base64ToUint8(audioBase64);
   // Tight copy so decodeAudioData can safely take ownership of the buffer.
-  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const ab = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
   const decoded = await getDecodeCtx().decodeAudioData(ab);
 
   const frameCount = Math.max(1, Math.ceil(decoded.duration * targetRate));
@@ -95,10 +98,7 @@ export async function decodeToSimliPcm(
     return float32ToPcm16(floats);
   }
 
-  const frameCount = Math.max(
-    1,
-    Math.ceil((floats.length * targetRate) / sourceRate),
-  );
+  const frameCount = Math.max(1, Math.ceil((floats.length * targetRate) / sourceRate));
   const offline = new OfflineAudioContext(1, frameCount, targetRate);
   const buffer = offline.createBuffer(1, floats.length, sourceRate);
   buffer.getChannelData(0).set(floats);

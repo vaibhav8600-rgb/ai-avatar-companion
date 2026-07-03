@@ -65,9 +65,7 @@ export function getVoices(): Promise<SpeechSynthesisVoice[]> {
 }
 
 /** Heuristic to pick a pleasant female-sounding English voice. */
-export function pickDefaultVoice(
-  voices: SpeechSynthesisVoice[],
-): SpeechSynthesisVoice | undefined {
+export function pickDefaultVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
   if (voices.length === 0) return undefined;
 
   // Preferred named voices in priority order.
@@ -86,9 +84,7 @@ export function pickDefaultVoice(
   }
 
   // Fall back to any English voice whose name contains "female".
-  const female = voices.find(
-    (v) => v.lang.startsWith("en") && /female/i.test(v.name),
-  );
+  const female = voices.find((v) => v.lang.startsWith("en") && /female/i.test(v.name));
   if (female) return female;
 
   // Otherwise first English voice.

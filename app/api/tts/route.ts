@@ -157,7 +157,10 @@ async function synthesizeViaLive(
     let sampleRate = 24000;
     let settled = false;
 
-    const timer = setTimeout(() => fail(new Error(`live timed out after ${LIVE_TIMEOUT_MS}ms`)), LIVE_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => fail(new Error(`live timed out after ${LIVE_TIMEOUT_MS}ms`)),
+      LIVE_TIMEOUT_MS,
+    );
 
     function cleanup() {
       clearTimeout(timer);

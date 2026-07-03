@@ -31,16 +31,16 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         this.props.fallback || (
-          <div className="min-h-dvh grid place-items-center px-6">
-            <div className="max-w-md text-center space-y-4">
-              <h2 className="font-display text-2xl text-cream-50">Something went off-script</h2>
-              <p className="text-sm text-cream-100/60">
+          <div className="grid min-h-dvh place-items-center px-6">
+            <div className="max-w-md space-y-4 text-center">
+              <h2 className="text-2xl font-bold text-ink-primary">Something went off-script</h2>
+              <p className="text-sm text-ink-secondary">
                 {this.state.message || "An unexpected error occurred."}
               </p>
               <button
                 type="button"
                 onClick={this.reset}
-                className="px-4 py-2 rounded-lg bg-signal-500/20 border border-signal-500/50 text-signal-400 text-sm hover:bg-signal-500/30"
+                className="rounded-full border border-accent-violet/50 bg-brand-gradient-soft px-5 py-2 text-sm font-medium text-ink-primary hover:bg-brand-gradient-soft/80"
               >
                 Try again
               </button>

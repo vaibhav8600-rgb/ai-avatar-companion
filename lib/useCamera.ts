@@ -62,49 +62,52 @@ export function useCamera() {
    * constraints (some mobile browsers reject strict ones). Stops the old stream
    * first — required for reliable switching on mobile — then attaches the new.
    */
-  const openStream = useCallback(async (facing: CameraFacingMode, deviceId?: string) => {
-    // Fully release + detach the previous stream before requesting a new one.
-    // Mobile browsers often won't hand over the other camera until the old one
-    // is stopped and the <video> source is cleared; a short delay lets the
-    // hardware settle before re-acquiring.
-    const hadStream = Boolean(streamRef.current);
-    releaseStream();
-    if (videoRef.current) videoRef.current.srcObject = null;
-    if (hadStream) await new Promise((r) => setTimeout(r, 250));
+  const openStream = useCallback(
+    async (facing: CameraFacingMode, deviceId?: string) => {
+      // Fully release + detach the previous stream before requesting a new one.
+      // Mobile browsers often won't hand over the other camera until the old one
+      // is stopped and the <video> source is cleared; a short delay lets the
+      // hardware settle before re-acquiring.
+      const hadStream = Boolean(streamRef.current);
+      releaseStream();
+      if (videoRef.current) videoRef.current.srcObject = null;
+      if (hadStream) await new Promise((r) => setTimeout(r, 250));
 
-    const attempts: MediaStreamConstraints[] = [];
-    if (deviceId) {
-      attempts.push({ video: { deviceId: { exact: deviceId } }, audio: false });
-    }
-    attempts.push({
-      video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
-    attempts.push({ video: { facingMode: facing }, audio: false });
-    attempts.push({ video: true, audio: false });
-
-    let stream: MediaStream | null = null;
-    let lastErr: unknown = null;
-    for (const constraints of attempts) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        break;
-      } catch (e) {
-        lastErr = e;
+      const attempts: MediaStreamConstraints[] = [];
+      if (deviceId) {
+        attempts.push({ video: { deviceId: { exact: deviceId } }, audio: false });
       }
-    }
-    if (!stream) throw lastErr ?? new Error("Camera unavailable");
+      attempts.push({
+        video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      attempts.push({ video: { facingMode: facing }, audio: false });
+      attempts.push({ video: true, audio: false });
 
-    streamRef.current = stream;
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play().catch(() => {});
-    }
-    facingRef.current = facing;
-    setCurrentFacingMode(facing);
-    savePreferredCamera(facing);
-    return stream;
-  }, [releaseStream]);
+      let stream: MediaStream | null = null;
+      let lastErr: unknown = null;
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (!stream) throw lastErr ?? new Error("Camera unavailable");
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      facingRef.current = facing;
+      setCurrentFacingMode(facing);
+      savePreferredCamera(facing);
+      return stream;
+    },
+    [releaseStream],
+  );
 
   const start = useCallback(
     async (options?: StartOptions): Promise<boolean> => {

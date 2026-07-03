@@ -30,10 +30,10 @@ interface SimliClientLike {
 }
 
 export type SimliStatus =
-  | "idle"          // not yet attempted
+  | "idle" // not yet attempted
   | "connecting"
   | "ready"
-  | "unconfigured"  // no SIMLI_API_KEY/FACE_ID on the server
+  | "unconfigured" // no SIMLI_API_KEY/FACE_ID on the server
   | "error";
 
 interface UseSimliAvatarCallbacks {
@@ -45,6 +45,46 @@ interface UseSimliAvatarCallbacks {
 // How many PCM bytes to push per chunk. 6000 bytes = 3000 samples ≈ 187ms
 // at 16kHz — small enough to stream smoothly, large enough to be efficient.
 const CHUNK_BYTES = 6000;
+
+// 100ms of PCM16 silence @16kHz — the keepalive heartbeat payload. Simli
+// closes sessions server-side after a short window with no audio input; a
+// later ClearBuffer()/send on the dead socket then throws synchronously
+// inside the mic click handler (SDK's ClearBuffer has no try/catch), which
+// in dev crashes the handler and summons the click-blocking error overlay.
+const KEEPALIVE_SILENCE = new Uint8Array(3200);
+// Heartbeat cadence, and how long after real audio we hold off (so silence
+// never lands in the middle of her speaking).
+const KEEPALIVE_INTERVAL_MS = 3000;
+const KEEPALIVE_IDLE_AFTER_MS = 4000;
+
+// ---------------------------------------------------------------------------
+// The Simli SDK's LiveKit transport disconnects twice by design (once from
+// stop(), once from its own RoomEvent.Disconnected handler), so the second
+// pass always throws on the closed socket and logs benign teardown noise via
+// console.error ("FAILED TO SEND FINAL MESSAGE", …). In Next.js dev, ANY
+// console.error summons the full-screen error overlay, which blocks every
+// click — perceived as a total UI freeze. Downgrade exactly these known
+// teardown messages to console.warn; everything else passes through intact.
+// ---------------------------------------------------------------------------
+const BENIGN_SIMLI_TEARDOWN = [
+  "FAILED TO SEND FINAL MESSAGE",
+  "SIGNALING ALREADY DISCONNECTED",
+  "LOCAL PEER ALREADY CLOSED",
+];
+let simliConsoleFilterInstalled = false;
+function installSimliConsoleFilter(): void {
+  if (simliConsoleFilterInstalled || typeof window === "undefined") return;
+  simliConsoleFilterInstalled = true;
+  const original = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const first = typeof args[0] === "string" ? args[0] : "";
+    if (first.includes("SimliClient") && BENIGN_SIMLI_TEARDOWN.some((m) => first.includes(m))) {
+      console.warn(...args); // still visible, but can't trigger the dev overlay
+      return;
+    }
+    original(...(args as Parameters<typeof console.error>));
+  };
+}
 
 /** Decode a TTS result to 16kHz PCM16 for Simli (MP3 → decode, else resample). */
 function decodeForSimli(audio: TtsAudioResult): Promise<Uint8Array> {
@@ -58,6 +98,31 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const clientRef = useRef<SimliClientLike | null>(null);
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+  // Bumped by stop(); an in-flight connect that finishes under a stale
+  // generation tears its client down instead of installing a zombie session.
+  const generationRef = useRef(0);
+  // Keepalive heartbeat timer + when real audio was last pushed.
+  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastAudioAtRef = useRef(0);
+
+  /** Tear everything down in place (shared by stop(), keepalive failure, unmount). */
+  const teardown = useCallback(() => {
+    generationRef.current++;
+    if (keepaliveRef.current) {
+      clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
+    }
+    if (!clientRef.current && !connectPromiseRef.current) return;
+    try {
+      clientRef.current?.stop().catch(() => {});
+    } catch {
+      // already dead — teardown is best-effort
+    }
+    clientRef.current = null;
+    connectPromiseRef.current = null;
+    // Don't clobber "unconfigured" — that's a permanent fact, not a live stream.
+    setStatus((s) => (s === "unconfigured" ? s : "idle"));
+  }, []);
   // In-flight Deepgram stream reader, so barge-in (clear) can cancel it.
   const streamReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const [status, setStatus] = useState<SimliStatus>("idle");
@@ -70,6 +135,8 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
 
   const doConnect = useCallback(async (): Promise<boolean> => {
     if (!videoRef.current || !audioRef.current) return false;
+    installSimliConsoleFilter();
+    const gen = generationRef.current;
     setStatus("connecting");
     try {
       const res = await fetch("/api/simli-session", { method: "POST" });
@@ -101,7 +168,7 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
         data.session_token,
         videoRef.current,
         audioRef.current,
-        null,            // iceServers: null is fine for the livekit transport
+        null, // iceServers: null is fine for the livekit transport
         LogLevel.ERROR,
         "livekit",
       ) as unknown as SimliClientLike;
@@ -113,10 +180,35 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
       );
 
       await client.start();
+      // stop() was called while we were connecting — tear this client down
+      // instead of installing a zombie session that streams (and bills)
+      // invisibly behind the still image.
+      if (generationRef.current !== gen) {
+        client.stop().catch(() => {});
+        return false;
+      }
       clientRef.current = client;
       // The mic press that precedes a reply already counts as a user gesture,
       // so this autoplay should be unblocked; ignore failures defensively.
       audioRef.current?.play().catch(() => {});
+
+      // Heartbeat: while she idles, send 100ms of silence every few seconds so
+      // Simli doesn't close the session server-side. If the send ever fails,
+      // the session is already dead — tear down cleanly so the UI falls back
+      // to the still image and the next spoken turn reconnects fresh.
+      lastAudioAtRef.current = Date.now();
+      if (keepaliveRef.current) clearInterval(keepaliveRef.current);
+      keepaliveRef.current = setInterval(() => {
+        const c = clientRef.current;
+        if (!c) return;
+        if (Date.now() - lastAudioAtRef.current < KEEPALIVE_IDLE_AFTER_MS) return;
+        try {
+          c.sendAudioData(KEEPALIVE_SILENCE);
+        } catch {
+          teardown();
+        }
+      }, KEEPALIVE_INTERVAL_MS);
+
       setStatus("ready");
       return true;
     } catch (err) {
@@ -124,12 +216,23 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
       cbRef.current.onError?.(err instanceof Error ? err.message : "Avatar connection failed");
       return false;
     }
-  }, []);
+  }, [teardown]);
+
+  // Read status through a ref so ensureConnected keeps a STABLE identity.
+  // When it closed over `status`, every status flip minted a new function;
+  // page.tsx's connect effect depends on that identity, so a failed connect
+  // (connecting → error) re-fired the effect, which reconnected, which failed
+  // again — an infinite connect loop that hammered /api/simli-session (rate
+  // limiter guarantees further failures) and froze the UI in Live Mode.
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  });
 
   /** Connect once; safe to call repeatedly. Returns whether Simli is usable. */
   const ensureConnected = useCallback((): Promise<boolean> => {
     if (clientRef.current) return Promise.resolve(true);
-    if (status === "unconfigured") return Promise.resolve(false);
+    if (statusRef.current === "unconfigured") return Promise.resolve(false);
     if (!connectPromiseRef.current) {
       connectPromiseRef.current = doConnect().then((ok) => {
         // Allow a retry later if this attempt failed (but not if unconfigured).
@@ -138,23 +241,21 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
       });
     }
     return connectPromiseRef.current;
-  }, [doConnect, status]);
+  }, [doConnect]);
 
   /** Synthesize `text` (Deepgram → Gemini fallback) and stream it for lip-sync. */
-  const speak = useCallback(
-    async (text: string, model?: string, voice?: string): Promise<void> => {
-      const client = clientRef.current;
-      if (!client) throw new Error("Avatar not connected");
+  const speak = useCallback(async (text: string, model?: string, voice?: string): Promise<void> => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Avatar not connected");
 
-      const audio = await fetchTtsAudio(text, model, voice);
-      const pcm = await decodeForSimli(audio);
+    const audio = await fetchTtsAudio(text, model, voice);
+    const pcm = await decodeForSimli(audio);
 
-      for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-        client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
-      }
-    },
-    [],
-  );
+    lastAudioAtRef.current = Date.now();
+    for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+      client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+    }
+  }, []);
 
   /**
    * Speak a sequence of text chunks, prefetching each chunk's TTS while the
@@ -183,6 +284,7 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
         }
         try {
           const pcm = await decodeForSimli(audio);
+          lastAudioAtRef.current = Date.now();
           for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
             client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
           }
@@ -238,6 +340,7 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
         const evenLen = buf.length - (buf.length % 2);
         if (buf.length % 2) leftover = buf.slice(evenLen);
         const pcm = buf.subarray(0, evenLen);
+        lastAudioAtRef.current = Date.now();
         for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
           client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
           sent = true;
@@ -252,7 +355,17 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
 
   /** Stop the avatar mid-sentence (used when the user starts talking). */
   const clear = useCallback(() => {
-    clientRef.current?.ClearBuffer();
+    // SDK bug: ClearBuffer() sends a "SKIP" signal with NO internal try/catch,
+    // so on a dead session it throws SYNCHRONOUSLY — and this runs inside the
+    // mic click handler, where an uncaught throw crashes the handler (and in
+    // dev summons the click-blocking Next error overlay = "frozen UI"). Treat
+    // a throw as proof the session is dead and tear it down so the next turn
+    // reconnects fresh.
+    try {
+      clientRef.current?.ClearBuffer();
+    } catch {
+      teardown();
+    }
     if (streamReaderRef.current) {
       try {
         streamReaderRef.current.cancel();
@@ -261,24 +374,25 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
       }
       streamReaderRef.current = null;
     }
-  }, []);
+  }, [teardown]);
 
   /** Tear down the stream entirely (e.g. when the user switches to image mode). */
-  const stop = useCallback(() => {
-    clientRef.current?.stop().catch(() => {});
-    clientRef.current = null;
-    connectPromiseRef.current = null;
-    // Don't clobber "unconfigured" — that's a permanent fact, not a live stream.
-    setStatus((s) => (s === "unconfigured" ? s : "idle"));
-  }, []);
+  const stop = teardown;
 
   // Tear down on unmount.
   useEffect(() => {
-    return () => {
-      clientRef.current?.stop().catch(() => {});
-      clientRef.current = null;
-    };
-  }, []);
+    return () => teardown();
+  }, [teardown]);
 
-  return { videoRef, audioRef, status, ensureConnected, speak, speakChunks, speakStream, clear, stop };
+  return {
+    videoRef,
+    audioRef,
+    status,
+    ensureConnected,
+    speak,
+    speakChunks,
+    speakStream,
+    clear,
+    stop,
+  };
 }

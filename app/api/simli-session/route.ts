@@ -32,10 +32,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!apiKey || !faceId) {
     // Not an error — just means the live avatar isn't set up.
-    return NextResponse.json(
-      { configured: false, error: "Simli not configured" },
-      { status: 200 },
-    );
+    return NextResponse.json({ configured: false, error: "Simli not configured" }, { status: 200 });
   }
 
   const config: SimliSessionConfig = {

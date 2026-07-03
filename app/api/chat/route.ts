@@ -31,9 +31,10 @@ function buildSystemPrompt(
   memory?: UserMemory,
   visionContext?: string,
 ): string {
-  const memoryBlock = memory && Object.keys(memory).length > 0
-    ? `\n\nThings you remember about this person (use naturally, do not list them back):\n${formatMemory(memory)}`
-    : "";
+  const memoryBlock =
+    memory && Object.keys(memory).length > 0
+      ? `\n\nThings you remember about this person (use naturally, do not list them back):\n${formatMemory(memory)}`
+      : "";
   const visionBlock = visionContext
     ? `\n\nThe camera currently sees: ${visionContext}\nUse this only if the person refers to what they're showing you. Do not identify unknown people.`
     : "";
@@ -71,10 +72,7 @@ function formatMemory(memory: UserMemory): string {
 
 // ----- providers -----
 
-async function callAnthropic(
-  messages: ChatRequest["messages"],
-  system: string,
-): Promise<string> {
+async function callAnthropic(messages: ChatRequest["messages"], system: string): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
@@ -100,14 +98,13 @@ async function callAnthropic(
     throw new Error(`Anthropic API error ${res.status}: ${errText}`);
   }
   const data = await res.json();
-  const block = Array.isArray(data.content) ? data.content.find((b: { type: string }) => b.type === "text") : null;
+  const block = Array.isArray(data.content)
+    ? data.content.find((b: { type: string }) => b.type === "text")
+    : null;
   return block?.text?.trim() || "I'm not sure how to respond to that.";
 }
 
-async function callOpenAI(
-  messages: ChatRequest["messages"],
-  system: string,
-): Promise<string> {
+async function callOpenAI(messages: ChatRequest["messages"], system: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
@@ -133,10 +130,7 @@ async function callOpenAI(
   return data.choices?.[0]?.message?.content?.trim() || "I'm not sure how to respond.";
 }
 
-async function callGoogleAI(
-  messages: ChatRequest["messages"],
-  system: string,
-): Promise<string> {
+async function callGoogleAI(messages: ChatRequest["messages"], system: string): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
   const model = process.env.GOOGLE_MODEL || "gemini-2.0-flash";
@@ -214,7 +208,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const windowed = body.messages.slice(-MAX_CONTEXT_MESSAGES);
 
   const assistantName = process.env.ASSISTANT_NAME || "Mira";
-  const persona = process.env.ASSISTANT_PERSONA || "warm, intelligent, professional, gently playful";
+  const persona =
+    process.env.ASSISTANT_PERSONA || "warm, intelligent, professional, gently playful";
   const provider = (process.env.AI_PROVIDER || "anthropic").toLowerCase();
   const system = buildSystemPrompt(assistantName, persona, body.memory, body.visionContext);
 

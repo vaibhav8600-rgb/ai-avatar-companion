@@ -1,5 +1,8 @@
 # Mira — Architecture & Diagrams
 
+> For the cosmic UI re-skin (design system, AvatarOrb, theming, skeletons, chat
+> attachments, and related fixes) see [UI_TRANSFORM.md](UI_TRANSFORM.md).
+
 Visual reference for the **AI Avatar Companion**. Each section shows a rendered
 image with the editable [Mermaid](https://mermaid.js.org/) source in a
 collapsible block. The `.mmd` sources also live standalone in
