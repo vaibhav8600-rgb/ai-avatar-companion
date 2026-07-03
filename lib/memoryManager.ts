@@ -61,6 +61,67 @@ export function clearHistory(): void {
   localStorage.removeItem(HISTORY_KEY);
 }
 
+// --- conversation backup (export / import as JSON) ---
+
+interface ConversationBackup {
+  kind: "mira-conversation";
+  version: 1;
+  exportedAt: string;
+  messages: ChatMessage[];
+  memory: UserMemory;
+}
+
+/** Serialize the current conversation + user memory to a portable JSON string. */
+export function exportConversation(): string {
+  const backup: ConversationBackup = {
+    kind: "mira-conversation",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    messages: loadHistory(),
+    memory: loadMemory(),
+  };
+  return JSON.stringify(backup, null, 2);
+}
+
+/** Type guard for a single restored message (tolerant of hand-edited files). */
+function isValidMessage(m: unknown): m is ChatMessage {
+  if (!m || typeof m !== "object") return false;
+  const x = m as Record<string, unknown>;
+  return (
+    (x.role === "user" || x.role === "assistant") &&
+    typeof x.content === "string" &&
+    typeof x.timestamp === "string"
+  );
+}
+
+/**
+ * Parse an exported conversation. Accepts the wrapped backup shape or a bare
+ * message array, and validates each message so a malformed file can't poison
+ * the transcript. Throws on unusable input; returns normalized messages +
+ * optional memory (which the caller decides whether to apply).
+ */
+export function importConversation(json: string): {
+  messages: ChatMessage[];
+  memory?: UserMemory;
+} {
+  const data: unknown = JSON.parse(json);
+  const raw = Array.isArray(data) ? data : ((data as { messages?: unknown }).messages ?? null);
+  if (!Array.isArray(raw)) {
+    throw new Error("Not a Mira conversation export.");
+  }
+  const messages = raw.filter(isValidMessage).map((m) => ({
+    id: typeof m.id === "string" && m.id ? m.id : crypto.randomUUID(),
+    role: m.role,
+    content: m.content,
+    timestamp: m.timestamp,
+    ...(typeof m.imageBase64 === "string" ? { imageBase64: m.imageBase64 } : {}),
+  }));
+  if (messages.length === 0) throw new Error("No valid messages found.");
+  const memRaw = !Array.isArray(data) ? (data as { memory?: unknown }).memory : undefined;
+  const memory = memRaw && typeof memRaw === "object" ? (memRaw as UserMemory) : undefined;
+  return { messages, memory };
+}
+
 // --- avatar voice model preference ---
 
 const TTS_MODEL_KEY = "aac:ttsModel:v1";
