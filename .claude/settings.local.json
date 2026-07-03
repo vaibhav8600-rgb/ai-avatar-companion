@@ -44,7 +44,9 @@
       "PowerShell(npx prettier --check . 2>&1)",
       "PowerShell(npx next lint 2>&1)",
       "Bash(OUT_DIR=\"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad\" NODE_PATH=\"F:/Projects/ai-avatar-companion/ai-avatar-companion/node_modules\" node \"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad/attach.cjs\")",
-      "Bash(OUT_DIR=\"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad\" NODE_PATH=\"F:/Projects/ai-avatar-companion/ai-avatar-companion/node_modules\" node \"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad/home-attach.cjs\")"
+      "Bash(OUT_DIR=\"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad\" NODE_PATH=\"F:/Projects/ai-avatar-companion/ai-avatar-companion/node_modules\" node \"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad/home-attach.cjs\")",
+      "Bash(git check-ignore *)",
+      "Bash(ls -d lib/design design)"
     ]
   }
 }
