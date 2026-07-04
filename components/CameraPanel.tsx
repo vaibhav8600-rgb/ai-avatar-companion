@@ -6,7 +6,7 @@
 // forms. Talk to Mira while the camera is on (Live Vision Conversation).
 // Capture + form state live here; analyze/save actions are owned by the page.
 
-import { useState, type ReactNode, type RefObject } from "react";
+import { useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import MicButton from "@/components/MicButton";
 import MiraLogo from "@/components/ui/MiraLogo";
 import type { AvatarState } from "@/types";
@@ -106,7 +106,7 @@ export default function CameraPanel({
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col overflow-y-auto bg-cosmic-base/95 backdrop-blur-xl animate-fade-up thin-scroll">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-5 sm:px-6 pt-[calc(1rem+env(safe-area-inset-top))]">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 px-4 py-3 sm:gap-5 sm:px-6 sm:py-5 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:pt-[calc(1rem+env(safe-area-inset-top))]">
         {/* Header */}
         <header className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -152,15 +152,14 @@ export default function CameraPanel({
           </div>
         </header>
 
-        {/* Framed live preview — sized to the stream's own aspect ratio
-            (landscape or portrait), capped so it always fits the viewport. */}
+        {/* Framed live preview. Phones get a tall, full-width portrait frame
+            (.cam-frame) so the view is big and vertical; larger screens honor
+            the stream's true aspect ratio via the --cam-aspect variable. The
+            <video> is object-cover, so it fills either frame without stretch. */}
         <div className="flex w-full justify-center">
           <div
-            className="relative w-full overflow-hidden rounded-panel border border-white/10 bg-black"
-            style={{
-              aspectRatio: String(videoAspect),
-              maxWidth: `min(100%, calc(58dvh * ${videoAspect}))`,
-            }}
+            className="cam-frame relative overflow-hidden rounded-panel border border-white/10 bg-black"
+            style={{ "--cam-aspect": String(videoAspect) } as CSSProperties}
           >
             <video
               ref={videoRef}
@@ -263,7 +262,7 @@ export default function CameraPanel({
         {/* ---- Preview: focus cards + mic ---- */}
         {phase === "preview" && (
           <>
-            <div className="flex flex-col items-center gap-3">
+            <div className="flex flex-col items-center gap-2 sm:gap-3">
               <p className="text-xs uppercase tracking-[0.18em] text-ink-secondary">{statusLine}</p>
               <MicButton
                 state={avatarState}
@@ -272,7 +271,7 @@ export default function CameraPanel({
                 onRelease={onMicRelease}
                 disabled={busy || !active}
               />
-              <p className="max-w-md text-center text-xs leading-relaxed text-ink-muted">
+              <p className="hidden max-w-md text-center text-xs leading-relaxed text-ink-muted sm:block">
                 {active
                   ? "Talk to me — “what do you see?”, “remember this as my keyboard”, “who is this?”"
                   : "Turn the camera on to start."}
@@ -280,10 +279,10 @@ export default function CameraPanel({
             </div>
 
             <div>
-              <p className="mb-3 text-sm font-medium text-ink-secondary">
+              <p className="mb-2 text-xs font-medium text-ink-secondary sm:mb-3 sm:text-sm">
                 What would you like Mira to focus on?
               </p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-4 gap-2 sm:gap-3">
                 <FocusCard
                   tone="cyan"
                   disabled={!active || busy}
@@ -558,11 +557,17 @@ function FocusCard({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`group flex flex-col gap-2 rounded-card border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tone === "red" ? "border-status-error/25 bg-status-error/[0.04] hover:border-status-error/50" : "border-white/10 bg-white/[0.03] hover:border-accent-violet/40"}`}
+      className={`group flex flex-col items-center gap-1.5 rounded-card border p-2.5 text-center transition-colors sm:items-start sm:gap-2 sm:p-4 sm:text-left disabled:cursor-not-allowed disabled:opacity-40 ${tone === "red" ? "border-status-error/25 bg-status-error/[0.04] hover:border-status-error/50" : "border-white/10 bg-white/[0.03] hover:border-accent-violet/40"}`}
     >
-      <span className={`grid h-10 w-10 place-items-center rounded-full ${toneClass}`}>{icon}</span>
-      <span className="font-semibold text-ink-primary">{title}</span>
-      <span className="flex items-center justify-between text-xs text-ink-secondary">
+      <span className={`grid h-9 w-9 place-items-center rounded-full sm:h-10 sm:w-10 ${toneClass}`}>
+        {icon}
+      </span>
+      <span className="text-xs font-semibold leading-tight text-ink-primary sm:text-base">
+        {title}
+      </span>
+      {/* Description only fits comfortably on larger screens; on phones the
+          icon + short title keep all four actions in one on-screen row. */}
+      <span className="hidden items-center justify-between text-xs text-ink-secondary sm:flex">
         {desc}
         <svg
           width="16"

@@ -50,7 +50,10 @@
       "Bash(OUT_DIR=\"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad\" NODE_PATH=\"F:/Projects/ai-avatar-companion/ai-avatar-companion/node_modules\" node \"C:/Users/LENOVO/AppData/Local/Temp/claude/f--Projects-ai-avatar-companion-ai-avatar-companion/7619c7cc-d075-48ae-ab9a-d9f1a0f3c1c3/scratchpad/conv-import.cjs\")",
       "PowerShell(npm install -D jest@^29.7.0 jest-environment-jsdom@^29.7.0 @types/jest@^29.5.14 @testing-library/react@^16.1.0 @testing-library/dom@^10.4.0 @testing-library/jest-dom@^6.6.3 @testing-library/user-event@^14.5.2 2>&1)",
       "Bash(npx jest *)",
-      "PowerShell(npm install -D fake-indexeddb@^6.0.0 2>&1)"
+      "PowerShell(npm install -D fake-indexeddb@^6.0.0 2>&1)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"---TSC DONE \\(exit $?\\)---\")",
+      "Bash(echo \"---TSC exit $?---\")"
     ]
   }
 }
