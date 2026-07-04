@@ -16,9 +16,10 @@ npm run build        # production build — ALSO runs ESLint + full type-check
 npm start            # serve the production build (required to test the PWA/service worker)
 npm run lint         # ESLint only
 npx tsc --noEmit     # fast type-check without building
+npm test             # Jest unit tests (jsdom); test:watch / test:ci also exist
 ```
 
-There is **no test framework** in this repo — do not assume Jest/Vitest/Playwright. Verify changes with `npx tsc --noEmit` and `npm run build` (the build is the source of truth; it fails on type or lint errors). Many behaviors (mic, mobile Web Speech, camera, Simli/PWA) require **real-device / browser testing** that cannot be done from CI — flag these explicitly rather than claiming they're verified.
+**Tests:** Jest + React Testing Library (via `next/jest`) cover the **pure logic** (`lib/*`) and a few presentational `components/ui` — see `docs/UI_TRANSFORM.md` §11. Test files live in `__tests__/` and are excluded from the production tsconfig, so they never block the build. `npm run build` remains the source of truth (type-check + lint + build). Media-heavy behaviors (mic, mobile Web Speech, camera, Simli/PWA, the R3F orb) require **real-device / browser testing** that unit tests can't cover — flag these explicitly rather than claiming they're verified.
 
 ## Architecture (the big picture)
 

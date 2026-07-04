@@ -225,9 +225,60 @@ Backup** row in Settings (Export / Import).
 - New runtime deps: `framer-motion`, `three`, `@react-three/fiber`,
   `@react-three/drei` (+ `@types/three`).
 
-## 11. Verifying changes
+## 11. Tests (Jest)
 
-`npm run build` is the source of truth (type-check + lint + build). There's no
-test framework; mic / mobile Web Speech / camera / Simli / PWA behaviors need
-real-device testing. Live-mode + PWA fixes were verified with headless Chrome
-(Playwright) against the production build.
+Unit tests run on **Jest + React Testing Library** via `next/jest` (SWC
+transform, jsdom env). Config: `jest.config.js`, `jest.setup.ts`. Run with:
+
+```bash
+npm test            # run once
+npm run test:watch  # watch mode
+npm run test:ci     # CI + coverage
+```
+
+**~206 tests across 40 suites.** `fake-indexeddb` backs the IndexedDB store and
+`jest.setup.ts` shims the browser APIs jsdom lacks (matchMedia, canvas 2D,
+media-element play/pause, `crypto.randomUUID`, `structuredClone`, blob URLs).
+
+**Logic — `lib/*` (every module):**
+
+- `textChunks`, `visionIntentRouter`, `visionClient` (`matchMemory`, prompt /
+  candidate builders), `design/tokens`.
+- `memoryManager` — persistence + conversation export/import (validation,
+  malformed input, history cap).
+- `visualMemory` — full IndexedDB CRUD + export/import (via fake-indexeddb).
+- `apiClient`, `ttsModels`, `perf`, `permissionManager`, `speechSynthesis`,
+  `speechRecognition` (finalize / silence-timer / late-event guards),
+  `audio` (base64 + same-rate PCM), `imageAttachment`, `ttsAudio`,
+  `useVoiceLevel`, `useAudioLevel`, `useCamera`, `useSimliAvatar` (lifecycle
+  smoke), `apiGuard` (origin + secret + in-memory rate limit, `node` env).
+
+**Components — render + interaction:**
+
+- `ui/*` (GlassPanel, NeonFrame, MiraLogo, RingGauge, ThemeToggle,
+  CosmicBackground, StatusPill, Skeleton, BuiltByFooter, GradientButton),
+  `voice/*` (VoiceMic, Waveform, CaptionBar, ThinkingIndicator, OfflineBanner),
+  MicButton, AvatarStage + AvatarOrb (`avatarToOrb` + CSS fallback),
+  ErrorBoundary, ChatView, ChatTranscript, SettingsPanel, VisionMemoryPanel,
+  CameraPanel, PermissionSetup, AvatarModeModal, InstallAppPrompt,
+  ServiceWorkerRegistrar.
+
+**App:** `api/chat` route (validation + demo/mock path, guard mocked) and a
+`page.tsx` smoke test (header, mic, settings open, theme toggle).
+
+Test files live in `__tests__/` and are **excluded from the production
+tsconfig**, so a test-only type error can never break the Vercel build; Jest
+runs them through SWC. Deliberately **not** unit-tested (they'd only exercise
+mocks): the R3F/WebGL orb internals (`components/avatar/OrbScene`,`OrbCanvas` —
+covered via AvatarOrb's non-WebGL fallback), the media-provider routes
+(`api/tts`, `api/tts/deepgram`, `api/vision/analyze`, `api/simli-session` — real
+Deepgram/Gemini/Simli network), `app/layout.tsx`, and the deep media pipeline
+(live mic/STT, Simli WebRTC lip-sync, camera). Those are covered by
+real-device / Playwright E2E against the production build.
+
+## 12. Verifying changes
+
+`npm run build` is the source of truth (type-check + lint + build); `npm test`
+covers the logic units. Live-mode, PWA/service-worker, theming, attachments, and
+the mobile Visual Memory fit were verified with headless Chrome (Playwright)
+against the production build.
