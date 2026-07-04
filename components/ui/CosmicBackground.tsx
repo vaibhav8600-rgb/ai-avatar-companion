@@ -44,7 +44,7 @@ export default function CosmicBackground() {
       const w = window.innerWidth;
       const h = window.innerHeight;
       // Denser field so the glitter reads across the whole app; capped for phones.
-      const count = Math.min(300, Math.round((w * h) / 6500));
+      const count = Math.min(650, Math.round((w * h) / 2600));
       stars = Array.from({ length: count }, () => ({
         x: Math.random() * w,
         y: Math.random() * h,
@@ -71,10 +71,12 @@ export default function CosmicBackground() {
       const w = window.innerWidth;
       const h = window.innerHeight;
       const light = document.documentElement.getAttribute("data-theme") === "light";
-      // Star / sparkle palettes per theme (r,g,b strings).
-      const base = light ? "71,85,140" : "226,232,255";
+      // Star / sparkle palettes per theme (r,g,b strings). Light mode uses
+      // darker, saturated indigo/violet so the glitter reads on a bright
+      // background (the old slate/near-white barely showed).
+      const base = light ? "79,70,229" : "226,232,255";
       const tint = light ? "124,58,237" : "196,181,253";
-      const spark = light ? "99,102,241" : "255,255,255";
+      const spark = light ? "109,40,217" : "255,255,255";
 
       ctx!.clearRect(0, 0, w, h);
       for (const s of stars) {
@@ -90,7 +92,9 @@ export default function CosmicBackground() {
 
         if (s.glitter) {
           // Bright sparkle: glowing core + thin cross-flare that flashes.
-          const a = (light ? 0.5 : 0.75) * twinkle * twinkle; // sharper flash
+          // Light mode keeps a higher floor (0.35..0.6) so sparkles never fully
+          // vanish against the bright backdrop; dark keeps the sharp flash.
+          const a = light ? 0.6 * (0.35 + 0.65 * twinkle * twinkle) : 0.75 * twinkle * twinkle;
           const r = 1 + s.z * 1.6;
           const flare = r * (2.5 + twinkle * 2.5);
           ctx!.strokeStyle = `rgba(${spark},${a * 0.6})`;
@@ -107,7 +111,11 @@ export default function CosmicBackground() {
           ctx!.fill();
         } else {
           const size = 0.4 + s.z * 1.4;
-          const alpha = (light ? 0.3 : 0.25 + s.z * 0.6) * twinkle;
+          // Light: raise the base and keep a twinkle floor so the field stays
+          // visible on white without looking noisy. Dark: original values.
+          const alpha = light
+            ? (0.28 + s.z * 0.32) * (0.5 + 0.5 * twinkle)
+            : (0.25 + s.z * 0.6) * twinkle;
           ctx!.beginPath();
           ctx!.arc(s.x, s.y, size, 0, Math.PI * 2);
           ctx!.fillStyle = s.z > 0.82 ? `rgba(${tint},${alpha})` : `rgba(${base},${alpha})`;
@@ -152,7 +160,7 @@ export default function CosmicBackground() {
     <canvas
       ref={canvasRef}
       aria-hidden
-      className="starfield pointer-events-none fixed inset-0 -z-10"
+      className="starfield pointer-events-none fixed inset-0"
     />
   );
 }

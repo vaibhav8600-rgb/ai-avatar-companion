@@ -73,10 +73,19 @@
   --nebula-d: rgba(196, 181, 253, 0.25);
 }
 
+/* The opaque base fill lives on <html> ONLY — never on <body>. Per the CSS
+   painting order, <body>'s own background (an in-flow block descendant of the
+   root) paints ABOVE negative-z-index children, so an opaque body background
+   would cover the fixed starfield canvas (z -1) and the nebula pseudo-layers,
+   hiding the entire glitter field. html's background paints at the very bottom
+   of the root stacking context, so the base shows through the transparent body
+   while the cosmic layers render on top of it. */
+html {
+  background: rgb(var(--bg-base));
+}
 html,
 body {
   height: 100%;
-  background: rgb(var(--bg-base));
   color: rgb(var(--text-primary));
   font-family: var(--font-inter), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -105,7 +114,7 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: -2;
+  z-index: -3;
   background:
     radial-gradient(45% 45% at 15% 20%, var(--nebula-a), transparent 70%),
     radial-gradient(40% 40% at 85% 25%, var(--nebula-b), transparent 70%),
@@ -123,7 +132,7 @@ body::after {
   bottom: 0;
   height: 36vh;
   pointer-events: none;
-  z-index: -1;
+  z-index: -2;
   background:
     radial-gradient(55% 90% at 18% 100%, rgb(var(--grad-start) / 0.18), transparent 65%),
     radial-gradient(55% 90% at 82% 100%, rgb(var(--grad-end) / 0.16), transparent 65%),
@@ -131,6 +140,45 @@ body::after {
 }
 [data-theme="light"] body::after {
   opacity: 0.45;
+}
+
+/* ---------------------------------------------------------------------------
+   iOS keyboard zoom fix. Mobile Safari auto-zooms (and then awkwardly scrolls)
+   into ANY focused form field whose font-size is < 16px — every composer here
+   uses text-sm (14px). Bumping touch devices to 16px kills the zoom-on-focus
+   at the source while leaving pinch-zoom accessibility intact (we deliberately
+   never lock maximum-scale). Unlayered so it beats Tailwind's `text-sm`
+   utility (unlayered styles win over @layer utilities regardless of
+   specificity); desktop keeps the smaller design size.
+--------------------------------------------------------------------------- */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Mobile camera preview. On phones a landscape webcam stream inside an
+   aspect-ratio box becomes a short letterbox. Give it a tall portrait frame
+   instead (the <video> is object-cover, so it fills without distortion) — a
+   bigger, more vertical view that matches how phone cameras are held. On
+   larger screens we honor the stream's true aspect ratio via --cam-aspect.
+--------------------------------------------------------------------------- */
+.cam-frame {
+  width: 100%;
+  /* Tall enough to feel like a proper phone camera, short enough to leave the
+     focus actions (Look / Teach / Close) on-screen without scrolling. */
+  height: min(48dvh, 48vh);
+}
+@media (min-width: 640px) {
+  .cam-frame {
+    height: auto;
+    aspect-ratio: var(--cam-aspect, 1.7778);
+    max-width: min(100%, calc(58dvh * var(--cam-aspect, 1.7778)));
+    margin-inline: auto;
+  }
 }
 
 /* Decorative layers must NEVER intercept input. The !important + descendant
@@ -142,8 +190,15 @@ body::after {
 }
 
 /* The starfield canvas runs in both themes (it picks theme-aware colors per
-   frame); keep a soft transition for theme switches. */
+   frame); keep a soft transition for theme switches.
+
+   z-index: -1 is load-bearing. It MUST sit ABOVE the opaque nebula/horizon
+   layers (body::before -3, body::after -2) — those end in a solid bg-base fill,
+   so a canvas painted behind them would be invisible — but BELOW the app
+   content (z 0+), so the glitter drifts across the entire viewport behind the
+   (mostly transparent) UI. */
 .starfield {
+  z-index: -1;
   transition: opacity 400ms ease;
 }
 

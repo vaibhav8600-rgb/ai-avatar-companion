@@ -64,9 +64,47 @@ describe("ThemeToggle", () => {
 });
 
 describe("CosmicBackground", () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute("data-theme");
+    jest.restoreAllMocks();
+  });
+
   it("mounts a decorative canvas and unmounts cleanly", () => {
+    const { container, unmount } = render(<CosmicBackground />);
+    // The `.starfield` class is load-bearing: its z-index:-1 lifts the field
+    // above the opaque nebula/base layers so the glitter shows app-wide.
+    expect(container.querySelector("canvas.starfield")).toBeInTheDocument();
+    expect(() => unmount()).not.toThrow();
+  });
+
+  it("runs the animation loop when motion is allowed", () => {
+    const raf = jest.spyOn(window, "requestAnimationFrame");
+    const { unmount } = render(<CosmicBackground />);
+    expect(raf).toHaveBeenCalled(); // drifting field is scheduled
+    unmount();
+  });
+
+  it("draws the light-theme palette branch without throwing", () => {
+    document.documentElement.setAttribute("data-theme", "light");
     const { container, unmount } = render(<CosmicBackground />);
     expect(container.querySelector("canvas.starfield")).toBeInTheDocument();
     expect(() => unmount()).not.toThrow();
+  });
+
+  it("renders a single static frame (no rAF loop) under reduced motion", () => {
+    jest.spyOn(window, "matchMedia").mockReturnValue({
+      matches: true, // prefers-reduced-motion: reduce
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    } as unknown as MediaQueryList);
+    const raf = jest.spyOn(window, "requestAnimationFrame");
+    const { unmount } = render(<CosmicBackground />);
+    expect(raf).not.toHaveBeenCalled();
+    unmount();
   });
 });

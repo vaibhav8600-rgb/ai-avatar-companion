@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CameraPanel from "@/components/CameraPanel";
 
@@ -59,5 +59,27 @@ describe("CameraPanel", () => {
     await userEvent.click(screen.getByText("Teach Object"));
     expect(await screen.findByText(/Teach Mira to remember objects/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^capture$/i })).toBeInTheDocument();
+  });
+
+  // The mobile "bigger, vertical" preview is driven by the .cam-frame class
+  // (tall on phones, aspect-honoring on desktop) + a --cam-aspect CSS var. The
+  // media-query sizing itself is CSS (jsdom can't evaluate it), but the class
+  // hook and the JS that feeds the var from the stream ARE unit-testable.
+  it("sizes the live preview via the cam-frame class and a 16:9 --cam-aspect default", () => {
+    const { container } = render(<CameraPanel {...makeProps()} />);
+    const frame = container.querySelector(".cam-frame") as HTMLElement | null;
+    expect(frame).not.toBeNull();
+    expect(frame!.style.getPropertyValue("--cam-aspect")).toBe(String(16 / 9));
+  });
+
+  it("adopts the stream's real aspect ratio from video metadata (portrait stream)", () => {
+    const { container } = render(<CameraPanel {...makeProps()} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    // jsdom videos report 0×0; define real dimensions before firing the event.
+    Object.defineProperty(video, "videoWidth", { value: 1080, configurable: true });
+    Object.defineProperty(video, "videoHeight", { value: 1920, configurable: true });
+    fireEvent.loadedMetadata(video);
+    const frame = container.querySelector(".cam-frame") as HTMLElement;
+    expect(frame.style.getPropertyValue("--cam-aspect")).toBe(String(1080 / 1920));
   });
 });
