@@ -353,6 +353,21 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     if (!sent) throw new Error("Deepgram stream produced no audio");
   }, []);
 
+  /**
+   * Push raw 16kHz PCM16 straight into the avatar (Gemini Live mode — the
+   * audio is already synthesized, no TTS round trip). Same chunking and
+   * keepalive bookkeeping as the text-driven speak paths. Throws when not
+   * connected so the caller can fall back to the still-image sink.
+   */
+  const sendPcm = useCallback((pcm: Uint8Array): void => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Avatar not connected");
+    lastAudioAtRef.current = Date.now();
+    for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
+      client.sendAudioData(pcm.subarray(offset, offset + CHUNK_BYTES));
+    }
+  }, []);
+
   /** Stop the avatar mid-sentence (used when the user starts talking). */
   const clear = useCallback(() => {
     // SDK bug: ClearBuffer() sends a "SKIP" signal with NO internal try/catch,
@@ -392,6 +407,7 @@ export function useSimliAvatar(callbacks: UseSimliAvatarCallbacks) {
     speak,
     speakChunks,
     speakStream,
+    sendPcm,
     clear,
     stop,
   };

@@ -5,6 +5,7 @@ import Waveform from "@/components/voice/Waveform";
 import CaptionBar from "@/components/voice/CaptionBar";
 import ThinkingIndicator from "@/components/voice/ThinkingIndicator";
 import OfflineBanner from "@/components/voice/OfflineBanner";
+import VoiceModePill from "@/components/voice/VoiceModePill";
 
 describe("VoiceMic", () => {
   it("fires onPress on click when idle", async () => {
@@ -45,6 +46,23 @@ describe("ThinkingIndicator", () => {
   it("announces analysis", () => {
     render(<ThinkingIndicator />);
     expect(screen.getByText(/Analyzing your request/i)).toBeInTheDocument();
+  });
+});
+
+describe("VoiceModePill", () => {
+  it("shows Live with the realtime tooltip", () => {
+    render(<VoiceModePill mode="live" />);
+    const pill = screen.getByText("Live");
+    expect(pill).toBeInTheDocument();
+    expect(pill.closest("span[title]")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/Gemini Live/i),
+    );
+  });
+
+  it("shows Classic for the fallback pipeline", () => {
+    render(<VoiceModePill mode="classic" />);
+    expect(screen.getByText("Classic")).toBeInTheDocument();
   });
 });
 

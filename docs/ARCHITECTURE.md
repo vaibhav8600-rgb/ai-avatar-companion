@@ -102,7 +102,66 @@ flowchart TB
 
 ---
 
-## 2. Conversation flow (voice + vision)
+## 2. Realtime voice — Gemini Live (primary pipeline)
+
+> _New — no PNG exported yet; the Mermaid source below is the reference._
+
+With `ENABLE_GEMINI_LIVE` + `GOOGLE_API_KEY` set, voice calls run over one
+WebSocket instead of the classic STT → chat → TTS round trip. Everything below
+falls back to the classic pipeline (section 3) on any failure, with
+transcripts flushed into shared history first so no context is lost.
+
+Key facts (all empirically verified — see `CLAUDE.md` for the gotchas):
+
+- `/api/live-token` mints a **1-use ephemeral token**; the browser connects
+  directly to Google (`BidiGenerateContentConstrained` + `access_token`). The
+  API key never leaves the server.
+- **All context lives in the token**: persona, user memory, recent history,
+  and the visual-memory catalog are folded into the token's locked
+  `systemInstruction`. A client-sent `systemInstruction` is silently ignored;
+  `clientContent{turnComplete:false}` seeding hard-closes the socket.
+- Voice is locked via `speechConfig` (`GEMINI_LIVE_VOICE` → `GEMINI_TTS_VOICE`
+  → Aoede); without it Google uses its default male voice.
+- **Live Vision**: camera frames stream at ~1 fps (`realtimeInput.video`);
+  the model _sees_ natively. **Tool calling** (`save_visual_memory` /
+  `forget_visual_memory`) persists to the same IndexedDB store — objects only,
+  people stay consent-gated behind the Teach Person UI.
+- Model audio (24 kHz PCM) plays through the SAME sinks as classic TTS:
+  `sendPcm` → Simli (lip-sync) or the `ttsAudio` PcmSink (still mode), so
+  barge-in/`stopServerTts()` cancels it identically.
+
+<details>
+<summary>Mermaid source</summary>
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant P as page.tsx
+  participant H as useGeminiLive
+  participant T as /api/live-token
+  participant G as Gemini Live (WS)
+
+  P->>T: POST {memory, history, visualMemories}
+  T->>G: mint ephemeral token (systemInstruction + tools + voice locked)
+  T-->>P: {token, model, voice}
+  H->>G: open WS (BidiGenerateContentConstrained?access_token=…)
+  H->>G: setup (AUDIO + transcriptions + speechConfig)
+  G-->>H: setupComplete → mode badge "Live"
+  U->>H: mic press → PCM16@16k realtimeInput (camera: +1fps video frames)
+  G-->>H: inputTranscription / outputTranscription / audio (24k PCM)
+  H->>P: onAudioChunk → Simli sendPcm | PcmSink · transcripts → shared history
+  G-->>H: toolCall save_visual_memory
+  H->>P: onToolCall → IndexedDB save (camera frame thumbnail)
+  H->>G: toolResponse → spoken confirmation
+  Note over H,G: interrupted = native barge-in · GoAway/drop → flush transcripts → classic failover
+```
+
+</details>
+
+---
+
+## 3. Conversation flow — classic pipeline (voice + vision fallback)
 
 ![Conversation flow](diagrams/flow.png)
 
@@ -161,7 +220,7 @@ flowchart TB
 
 ---
 
-## 3. Sequence — voice call turn (live avatar mode)
+## 4. Sequence — classic voice call turn (live avatar mode)
 
 ![Voice call turn sequence](diagrams/sequence-voice-turn.png)
 
@@ -221,7 +280,7 @@ sequenceDiagram
 
 ---
 
-## 4. Sequence — Mira Vision turn (remember / recognize)
+## 5. Sequence — Mira Vision turn (remember / recognize)
 
 > No exported image yet — render
 > [`diagrams/sequence-vision-turn.mmd`](diagrams/sequence-vision-turn.mmd) with the

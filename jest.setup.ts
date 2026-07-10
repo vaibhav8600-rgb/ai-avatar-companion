@@ -31,6 +31,12 @@ if (typeof globalThis.structuredClone !== "function") {
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
+/* ---- Never mint real Gemini Live tokens from unit tests (next/jest loads
+   .env.local): tests that exercise /api/live-token set these explicitly and
+   mock fetch. ---- */
+delete process.env.ENABLE_GEMINI_LIVE;
+delete process.env.GOOGLE_API_KEY;
+
 /* ---- DOM-only shims (skipped under the node test environment) ---- */
 if (typeof window !== "undefined") {
   // matchMedia (theme, reduced-motion, responsive hooks)
