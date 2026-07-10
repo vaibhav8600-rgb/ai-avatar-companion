@@ -236,7 +236,7 @@ npm run test:watch  # watch mode
 npm run test:ci     # CI + coverage
 ```
 
-**~206 tests across 40 suites.** `fake-indexeddb` backs the IndexedDB store and
+**~239 tests across 42 suites.** `fake-indexeddb` backs the IndexedDB store and
 `jest.setup.ts` shims the browser APIs jsdom lacks (matchMedia, canvas 2D,
 media-element play/pause, `crypto.randomUUID`, `structuredClone`, blob URLs).
 

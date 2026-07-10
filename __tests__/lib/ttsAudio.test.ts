@@ -1,4 +1,10 @@
-import { fetchTtsAudio, isTtsAudioSupported, stopServerTts, primeTtsAudio } from "@/lib/ttsAudio";
+import {
+  fetchTtsAudio,
+  isTtsAudioSupported,
+  stopServerTts,
+  primeTtsAudio,
+  createPcmSink,
+} from "@/lib/ttsAudio";
 
 describe("fetchTtsAudio", () => {
   afterEach(() => jest.restoreAllMocks());
@@ -37,5 +43,11 @@ describe("ttsAudio guards", () => {
   it("stop and prime are safe to call even with no audio context", () => {
     expect(() => stopServerTts()).not.toThrow();
     expect(() => primeTtsAudio()).not.toThrow();
+  });
+
+  it("createPcmSink (Gemini Live playback) throws cleanly without Web Audio", () => {
+    // jsdom has no AudioContext — the caller catches this and the turn's
+    // transcripts still flow even though audio can't play.
+    expect(() => createPcmSink({ sampleRate: 24000 })).toThrow(/web audio/i);
   });
 });

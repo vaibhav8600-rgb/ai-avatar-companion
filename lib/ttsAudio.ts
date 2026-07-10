@@ -377,3 +377,123 @@ export async function streamServerTts(opts: StreamOptions): Promise<void> {
     lastSource.addEventListener("ended", () => resolve(), { once: true });
   });
 }
+
+// ----- push-based PCM sink (Gemini Live, still mode) -----
+
+export interface PcmSink {
+  /** Queue raw PCM16 LE bytes (at the sink's sample rate) for playback. */
+  push(bytes: Uint8Array): void;
+  /** No more audio coming; resolves when everything scheduled has played. */
+  end(): Promise<void>;
+  /** Cancel immediately (barge-in). Safe to call more than once. */
+  stop(): void;
+}
+
+/**
+ * A push-based player for realtime PCM (Gemini Live hands us base64 PCM16
+ * chunks over a WebSocket — there's no Response body to read from). Built on
+ * the SAME machinery as the classic tiers: same AudioContext, same
+ * `scheduledSources` set and `playGeneration` token — so `stopServerTts()`
+ * (the shared barge-in path) cancels a live sink exactly like it cancels a
+ * Deepgram stream. Throws if Web Audio is unavailable (caller falls back).
+ */
+export function createPcmSink(opts: {
+  sampleRate: number;
+  volume?: number;
+  /** Fired once, when the first audio actually starts playing. */
+  onFirstPlay?: () => void;
+}): PcmSink {
+  const ctx = getCtx();
+  if (!ctx) throw new Error("Web Audio unavailable");
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+
+  // Supersede any previous playback, then claim this sink's token.
+  stopServerTts();
+  const myGen = ++playGeneration;
+  const stillCurrent = () => myGen === playGeneration;
+
+  const volume = opts.volume ?? 1;
+  const flushBytes = opts.sampleRate * 2 * 0.12; // ~120ms blocks, like the stream player
+  let nextTime = 0;
+  let started = false;
+  let leftover: Uint8Array | null = null;
+  let lastSource: AudioBufferSourceNode | null = null;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let ended = false;
+
+  const scheduleFloats = (floats: Float32Array) => {
+    const buffer = ctx.createBuffer(1, floats.length, opts.sampleRate);
+    buffer.getChannelData(0).set(floats);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    source.connect(gain).connect(ctx.destination);
+    const now = ctx.currentTime;
+    if (nextTime < now + 0.05) nextTime = now + 0.08;
+    source.start(nextTime);
+    nextTime += buffer.duration;
+    scheduledSources.add(source);
+    source.onended = () => scheduledSources.delete(source);
+    lastSource = source;
+    if (!started) {
+      started = true;
+      opts.onFirstPlay?.();
+    }
+  };
+
+  const flushPending = () => {
+    if (pendingBytes === 0 && !leftover) return;
+    let merged = new Uint8Array(pendingBytes);
+    let o = 0;
+    for (const p of pending) {
+      merged.set(p, o);
+      o += p.length;
+    }
+    pending = [];
+    pendingBytes = 0;
+    if (leftover) {
+      const m = new Uint8Array(leftover.length + merged.length);
+      m.set(leftover, 0);
+      m.set(merged, leftover.length);
+      merged = m;
+      leftover = null;
+    }
+    const evenLen = merged.length - (merged.length % 2);
+    if (merged.length % 2) leftover = merged.slice(evenLen);
+    if (evenLen === 0) return;
+    const view = new DataView(merged.buffer, merged.byteOffset, evenLen);
+    const n = evenLen / 2;
+    const floats = new Float32Array(n);
+    for (let i = 0; i < n; i++) floats[i] = view.getInt16(i * 2, true) / 32768;
+    scheduleFloats(floats);
+  };
+
+  return {
+    push(bytes: Uint8Array): void {
+      if (ended || !stillCurrent() || !bytes.length) return;
+      pending.push(bytes);
+      pendingBytes += bytes.length;
+      if (pendingBytes >= flushBytes) flushPending();
+    },
+    end(): Promise<void> {
+      if (ended) return Promise.resolve();
+      ended = true;
+      if (stillCurrent()) flushPending();
+      return new Promise<void>((resolve) => {
+        if (!stillCurrent() || !lastSource) return resolve();
+        lastSource.addEventListener("ended", () => resolve(), { once: true });
+      });
+    },
+    stop(): void {
+      ended = true;
+      pending = [];
+      pendingBytes = 0;
+      leftover = null;
+      // Only tear the shared pipeline down if we still own it — never yank
+      // audio that a newer reply has already claimed.
+      if (stillCurrent()) stopServerTts();
+    },
+  };
+}

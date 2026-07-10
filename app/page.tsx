@@ -48,12 +48,18 @@ import {
   primeSpeechSynthesis,
 } from "@/lib/speechSynthesis";
 import { useSimliAvatar } from "@/lib/useSimliAvatar";
+import { useGeminiLive } from "@/lib/useGeminiLive";
+import { formatMemory } from "@/lib/systemPrompt";
+import { decodeToSimliPcm, base64ToUint8 } from "@/lib/audio";
+import VoiceModePill from "@/components/voice/VoiceModePill";
 import {
   streamServerTts,
   playServerTtsChunks,
   stopServerTts,
   primeTtsAudio,
   isTtsAudioSupported,
+  createPcmSink,
+  type PcmSink,
 } from "@/lib/ttsAudio";
 import { splitIntoSpeechChunks } from "@/lib/textChunks";
 import { perfStart, perfMark, perfFlush } from "@/lib/perf";
@@ -208,7 +214,17 @@ export default function Page() {
     // Only a real end-of-speech returns us to idle. We must NOT reset from
     // "thinking" here: clear()/barge-in emits an async "silent" that can land
     // during the next turn's "thinking" and would otherwise flicker the label.
-    onSilent: () => setAvatarState((s) => (s === "speaking" ? "idle" : s)),
+    // In Live voice mode with the mic engaged, a finished turn returns to
+    // "listening" (continuous conversation), not idle. (Refs are read at event
+    // time — they're declared just below this hook.)
+    onSilent: () =>
+      setAvatarState((s) =>
+        s === "speaking"
+          ? voiceModeRef.current === "live" && liveEngagedRef.current
+            ? "listening"
+            : "idle"
+          : s,
+      ),
     onError: (m) => {
       console.warn("Live avatar:", m);
       liveStopRef.current(); // graceful fallback to the still image
@@ -222,6 +238,271 @@ export default function Page() {
   const liveActive =
     liveAvatarEnabled && (liveAvatar.status === "connecting" || liveAvatar.status === "ready");
   const liveAvatarSupported = liveAvatar.status !== "unconfigured";
+
+  // ----- voice pipeline mode: Gemini Live (primary) vs classic (fallback) -----
+  // "live"    = realtime Gemini Live WebSocket session (server-side STT/VAD,
+  //             native audio out) — attempted first when the server has it
+  //             configured (ENABLE_GEMINI_LIVE + GOOGLE_API_KEY).
+  // "classic" = the existing Web Speech STT → /api/chat → TTS chain. Always
+  //             fully functional; every failure path lands here.
+  const [voiceMode, setVoiceMode] = useState<"live" | "classic">("classic");
+  const voiceModeRef = useRef<"live" | "classic">("classic");
+  useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
+  // Transient, non-alarming note shown when the pipeline switches mid-call.
+  const [voiceModeNotice, setVoiceModeNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!voiceModeNotice) return;
+    const t = setTimeout(() => setVoiceModeNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [voiceModeNotice]);
+
+  // Still-mode playback sink for Live audio (same Web Audio machinery as the
+  // classic tiers — stopServerTts()/barge-in cancels it identically).
+  const liveSinkRef = useRef<PcmSink | null>(null);
+  // Ordered decode→Simli queue (decode is async; chunks must stay in order).
+  const liveSimliChainRef = useRef<Promise<void>>(Promise.resolve());
+  // True while the user has the live call running (mic engaged) — decides
+  // whether a failover re-opens the classic mic to continue the conversation.
+  const liveEngagedRef = useRef(false);
+  // Memory snapshot the current Live token was minted with — lets Settings
+  // close detect a profile change and update the running session in-band.
+  const liveMemoryJsonRef = useRef("");
+
+  const geminiLive = useGeminiLive({
+    // Model audio: feed the EXACT same playback code the classic chain uses.
+    onAudioChunk: (b64, rate) => {
+      if (liveAvatarEnabled && liveAvatar.status === "ready") {
+        // Simli connected → decode/resample to 16k and lip-sync, in order.
+        liveSimliChainRef.current = liveSimliChainRef.current
+          .then(async () => {
+            const pcm = await decodeToSimliPcm(b64, rate, 16000);
+            liveAvatar.sendPcm(pcm);
+          })
+          .catch(() => {
+            // dropped chunk — Simli's own watchdogs/keepalive cover recovery
+          });
+        return;
+      }
+      // Still image → push-based PCM sink (created lazily per model turn).
+      let sink = liveSinkRef.current;
+      if (!sink) {
+        try {
+          sink = createPcmSink({
+            sampleRate: rate,
+            volume,
+            onFirstPlay: () => {
+              setAvatarState("speaking");
+              perfMark("first-audio");
+              perfFlush();
+            },
+          });
+        } catch {
+          return; // no Web Audio — audio is lost this turn, transcripts still flow
+        }
+        liveSinkRef.current = sink;
+      }
+      sink.push(base64ToUint8(b64));
+    },
+    // Transcripts append to the SAME shared history /api/chat reads, so a
+    // mid-call failover hands the classic pipeline full context.
+    onUserTranscript: (text) => {
+      setInterimText("");
+      setMessages((m) => [
+        ...m,
+        {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: text,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    },
+    onUserTranscriptDelta: (textSoFar) => setInterimText(textSoFar),
+    onModelTranscript: (text) => {
+      setMessages((m) => [
+        ...m,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: text,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    },
+    onModelTranscriptDelta: (textSoFar) => setCaption(textSoFar),
+    onTurnComplete: () => {
+      const sink = liveSinkRef.current;
+      liveSinkRef.current = null;
+      // "thinking" is included for TEXT turns sent into the session (camera
+      // mode / text box): they enter via thinking and must settle even if
+      // audio never started (e.g. no Web Audio).
+      const settle = () =>
+        setAvatarState((s) =>
+          s === "speaking" || s === "thinking"
+            ? liveEngagedRef.current
+              ? "listening"
+              : "idle"
+            : s,
+        );
+      if (sink) {
+        // Let the tail of the audio drain, then settle: back to listening
+        // (mic still open — continuous conversation) or idle.
+        void sink.end().then(settle);
+      } else if (!(liveAvatarEnabled && liveAvatar.status === "ready")) {
+        // No sink and not routing to Simli — nothing will emit a playback
+        // event, so settle now. (Simli path: its own "silent" event settles.)
+        settle();
+      }
+    },
+    onInterrupted: () => {
+      // Native barge-in (server VAD): stop playback the same way the classic
+      // barge-in does, just triggered by the server event.
+      liveSinkRef.current?.stop();
+      liveSinkRef.current = null;
+      liveAvatar.clear();
+      setAvatarState((s) => (s === "speaking" ? "listening" : s));
+    },
+    // Live tool calls — this is how "remember this as…" SAVES in Live mode.
+    // The model decides to call; we do the actual persistence (IndexedDB, same
+    // store the classic flows use) and hand back a result it speaks from.
+    // People stay consent-gated: the tool is declared objects-only server-side.
+    onToolCall: async (name, args) => {
+      if (name === "save_visual_memory") {
+        const label = String(args.label ?? "").trim();
+        const description = String(args.description ?? "").trim();
+        if (!label) return { ok: false, error: "missing label" };
+        const frame = camera.capture();
+        if (!frame) {
+          return { ok: false, error: "camera is not active — ask the user to open the camera" };
+        }
+        try {
+          const thumb = await makeThumbnail(frame);
+          await saveVisualMemory({
+            type: "object",
+            label,
+            description,
+            thumbnailBase64: thumb,
+            tags: [],
+          });
+          return { ok: true, saved: label };
+        } catch {
+          return { ok: false, error: "saving failed" };
+        }
+      }
+      if (name === "forget_visual_memory") {
+        const label = String(args.label ?? "").trim();
+        if (!label) return { ok: false, error: "missing label" };
+        const all = await listMemories();
+        const found =
+          all.find((m) => m.label.toLowerCase() === label.toLowerCase()) ||
+          (await searchMemories(label))[0];
+        if (!found) return { ok: false, error: `nothing saved as "${label}"` };
+        await deleteVisualMemory(found.id);
+        return { ok: true, forgot: found.label };
+      }
+      return { ok: false, error: "unknown tool" };
+    },
+    onFailover: (reason) => {
+      console.warn(`[voice] Switched to classic voice mode — ${reason}`);
+      liveSinkRef.current?.stop();
+      liveSinkRef.current = null;
+      const wasEngaged = liveEngagedRef.current;
+      liveEngagedRef.current = false;
+      setVoiceMode("classic");
+      setVoiceModeNotice("Live voice ended — continuing on the classic pipeline");
+      setAvatarState((s) => (s === "listening" || s === "speaking" ? "idle" : s));
+      // Continue the call seamlessly: re-open the classic mic for the next
+      // turn. Context is preserved — the Live transcripts are already in
+      // `messages`, so the next /api/chat call knows everything said so far.
+      if (wasEngaged) {
+        setTimeout(() => startListeningRef.current(), 250);
+      }
+    },
+  });
+
+  // Attempt the Live session eagerly while the call view is open (mirrors the
+  // Simli eager-connect pattern) so the first mic press has zero added
+  // latency. Any failure settles to classic silently — exactly today's UX.
+  // The cleanup tears the session down when leaving the call view; returning
+  // re-attempts, which is also the "next call" re-entry point after a
+  // failover. Cleanup-based on purpose: React StrictMode double-invokes
+  // effects in dev (mount → cleanup → mount), and a run-once ref guard here
+  // left the second pass permanently disconnected — classic mode forever.
+  useEffect(() => {
+    if (viewMode !== "call") return;
+    let cancelled = false;
+    void (async () => {
+      // Read persisted context DIRECTLY from the stores, not from React state:
+      // this effect runs on first mount BEFORE the restore-persistence effect
+      // has populated `memory`/`messages`, and a token minted with empty
+      // context left Live-Mira amnesiac (no user name, no history) for the
+      // whole session. localStorage/IndexedDB are always current — the save
+      // effects persist on every change.
+      const memorySnapshot = loadMemory();
+      const historySnapshot = loadHistory();
+      let visualMemories: { type: string; label: string; description: string }[] = [];
+      try {
+        visualMemories = (await listMemories()).map((m) => ({
+          type: m.type,
+          label: m.label,
+          description: m.description,
+        }));
+      } catch {
+        // no visual memories — connect without the catalog
+      }
+      if (cancelled) return;
+      const ok = await geminiLive.connect({
+        memory: memorySnapshot,
+        history: historySnapshot,
+        visualMemories,
+      });
+      if (ok && !cancelled) {
+        liveMemoryJsonRef.current = JSON.stringify(memorySnapshot);
+        setVoiceMode("live");
+        console.info("[voice] Gemini Live session ready — realtime voice active");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      liveEngagedRef.current = false;
+      geminiLive.disconnect();
+      setVoiceMode("classic");
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, geminiLive.connect, geminiLive.disconnect]);
+
+  // ----- Live Vision: camera frames stream straight into the Live session -----
+  // While the camera is open in Live mode, Mira SEES through Gemini Live
+  // itself: ~1 fps JPEG frames go over the socket as `realtimeInput.video`,
+  // and the live mic keeps working — real speech-to-speech about what's in
+  // view, no /api/vision round trip. The classic capture→analyze flow remains
+  // the fallback (classic voice mode) and still powers the explicit Teach /
+  // recognition memory flows.
+  useEffect(() => {
+    if (
+      !cameraOpen ||
+      voiceMode !== "live" ||
+      geminiLive.status !== "live" ||
+      camera.status !== "active"
+    ) {
+      return;
+    }
+    const id = setInterval(() => {
+      const frame = camera.capture(); // JPEG data-URL, downscaled
+      if (frame) geminiLive.sendVideoFrame(frame);
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    cameraOpen,
+    voiceMode,
+    geminiLive.status,
+    camera.status,
+    camera.capture,
+    geminiLive.sendVideoFrame,
+  ]);
 
   // Speak a reply through the browser's built-in voice (fallback path).
   const speakWithBrowser = useCallback(
@@ -246,16 +527,36 @@ export default function Page() {
 
   // Keep a closure-safe mirror of the avatar state for timers/watchdogs, and
   // drive hands-free: when she finishes speaking, re-open the mic automatically.
+  // Live voice mode is inherently hands-free (its mic stays open across turns),
+  // so the classic Web Speech re-arm must not fire there — it would grab the
+  // microphone out from under the Live session.
   useEffect(() => {
     const prev = avatarStateRef.current;
     avatarStateRef.current = avatarState;
-    if (handsFreeRef.current && prev === "speaking" && avatarState === "idle" && !cameraOpen) {
+    if (
+      handsFreeRef.current &&
+      prev === "speaking" &&
+      avatarState === "idle" &&
+      !cameraOpen &&
+      voiceModeRef.current !== "live"
+    ) {
       autoRestartCountRef.current = 0;
       startListeningRef.current();
     }
   }, [avatarState, cameraOpen]);
 
   // ----- restore persistence on mount -----
+  // `hydrated` gates the save effects below. It must be STATE (not a ref): the
+  // save effects' first runs happen in the same effects pass as this restore,
+  // BEFORE the restored state has committed — so with no gate they write the
+  // initial {}/[]/false defaults over the persisted values. A single prod
+  // mount self-healed (this effect captured the real values first), but dev
+  // StrictMode's second effects pass read localStorage DURING that clobber
+  // window — which minted the Live token with empty memory/history ("she
+  // doesn't know my name") and reset toggles on dev reloads. As state, the
+  // gate only flips after the restored values are committed, so the saves
+  // never see pre-hydration defaults at all.
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     setMemory(loadMemory());
     setMessages(loadHistory());
@@ -266,6 +567,7 @@ export default function Page() {
     setAutoCaptureVision(loadAutoCaptureVision());
     setCaptionsEnabled(loadCaptions());
     setHandsFree(loadHandsFree());
+    setHydrated(true);
   }, []);
 
   // Track online/offline so we can warn instead of failing silently.
@@ -282,8 +584,9 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveKnownPersonRecognition(knownPersonRecognition);
-  }, [knownPersonRecognition]);
+  }, [hydrated, knownPersonRecognition]);
 
   // First-run permission onboarding: show the setup card unless we've already
   // initialized, or the browser already reports camera+mic as granted.
@@ -305,36 +608,44 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveLiveVision(liveVisionEnabled);
-  }, [liveVisionEnabled]);
+  }, [hydrated, liveVisionEnabled]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveAutoCaptureVision(autoCaptureVision);
-  }, [autoCaptureVision]);
+  }, [hydrated, autoCaptureVision]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveTtsModel(ttsModel);
-  }, [ttsModel]);
+  }, [hydrated, ttsModel]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveGeminiVoice(geminiVoice);
-  }, [geminiVoice]);
+  }, [hydrated, geminiVoice]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveCaptions(captionsEnabled);
-  }, [captionsEnabled]);
+  }, [hydrated, captionsEnabled]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveHandsFree(handsFree);
-  }, [handsFree]);
+  }, [hydrated, handsFree]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveMemory(memory);
-  }, [memory]);
+  }, [hydrated, memory]);
 
   useEffect(() => {
+    if (!hydrated) return;
     saveHistory(messages);
-  }, [messages]);
+  }, [hydrated, messages]);
 
   // Reset error after a short delay so the UI doesn't stay stuck on error.
   // Retriable errors stay until the user acts (so the Retry button remains).
@@ -369,7 +680,10 @@ export default function Page() {
   // the Simli buffer).
   const interruptSpeech = useCallback(() => {
     stopSpeaking();
-    stopServerTts();
+    stopServerTts(); // also cancels the Live PcmSink (shared generation token)
+    // Drop the (now dead) sink reference — pushing Live audio into a stopped
+    // sink is a silent no-op, which would mute the next whole model turn.
+    liveSinkRef.current = null;
     liveAvatar.clear();
   }, [liveAvatar.clear]);
 
@@ -524,6 +838,19 @@ export default function Page() {
 
   // "Look" — describe the scene and recognize learned objects.
   const handleLook = useCallback(async () => {
+    // Live Vision: she already sees the streamed camera frames — ask inside
+    // the session (native audio reply, saved-memory catalog in her prompt).
+    // Falls through to the classic capture→analyze flow when not live.
+    if (
+      voiceModeRef.current === "live" &&
+      geminiLive.sendText(
+        "Describe what you can see in the camera right now, briefly and naturally. " +
+          "If it matches one of your saved visual memories, say which one.",
+      )
+    ) {
+      setAvatarState("thinking");
+      return;
+    }
     const frame = camera.capture();
     if (!frame) {
       speakMiraResponse("I couldn't capture the camera image — is the camera on?");
@@ -562,7 +889,7 @@ export default function Page() {
     } finally {
       setVisionBusy(false);
     }
-  }, [camera, speakMiraResponse]);
+  }, [camera, speakMiraResponse, geminiLive.sendText]);
 
   const handleTeachObjectSave = useCallback(
     async (frame: string, label: string, notes: string) => {
@@ -585,7 +912,17 @@ export default function Page() {
           thumbnailBase64: thumb,
           tags: [],
         });
-        speakMiraResponse(`Got it, I'll remember this as your ${spokenLabel(label)}.`);
+        // Live mode: confirm inside the session — she speaks with the Live
+        // voice AND now knows the item for the rest of this call (new
+        // sessions get it from the token's visual-memory catalog).
+        if (!(
+          voiceModeRef.current === "live" &&
+          geminiLive.sendText(
+            `[System note: via the Teach button, the user just taught you a new visual memory: "${label}" — ${description}. Briefly confirm you'll remember it.]`,
+          )
+        )) {
+          speakMiraResponse(`Got it, I'll remember this as your ${spokenLabel(label)}.`);
+        }
       } catch {
         speakMiraResponse("Sorry, I couldn't save that object. Try again?");
       } finally {
@@ -593,7 +930,7 @@ export default function Page() {
         setAvatarState("idle");
       }
     },
-    [speakMiraResponse],
+    [speakMiraResponse, geminiLive.sendText],
   );
 
   const handleTeachPersonSave = useCallback(
@@ -616,9 +953,16 @@ export default function Page() {
           extraThumbnails: thumbs.slice(1),
           consented: true,
         });
-        speakMiraResponse(
-          `Okay — I've saved ${name} as a known person, with your consent. You can remove this anytime in Settings.`,
-        );
+        if (!(
+          voiceModeRef.current === "live" &&
+          geminiLive.sendText(
+            `[System note: with explicit consent via the Teach Person button, the user just taught you a known person: "${name}"${description ? ` — ${description}` : ""}. Briefly confirm you'll remember them, and mention they can remove this anytime in Settings.]`,
+          )
+        )) {
+          speakMiraResponse(
+            `Okay — I've saved ${name} as a known person, with your consent. You can remove this anytime in Settings.`,
+          );
+        }
       } catch {
         speakMiraResponse("Sorry, I couldn't save that.");
       } finally {
@@ -626,7 +970,7 @@ export default function Page() {
         setAvatarState("idle");
       }
     },
-    [speakMiraResponse],
+    [speakMiraResponse, geminiLive.sendText],
   );
 
   const handleForget = useCallback(
@@ -944,6 +1288,21 @@ export default function Page() {
       const visionContext = pendingVisionContextRef.current || undefined;
       pendingVisionContextRef.current = "";
 
+      // Live voice path: while the realtime session is up, spoken turns that
+      // arrive as TEXT (camera mode's classic mic — kept classic so the vision
+      // intent router still works — and the voice-screen text box) go straight
+      // into the Live session. The reply comes back as native audio + a
+      // transcript through the same Live callbacks as mic turns, so Mira keeps
+      // ONE consistent voice everywhere. Vision context rides along inline.
+      // Falls through to the classic /api/chat chain whenever the session
+      // can't take the turn (not live, socket busy dying, etc.).
+      if (shouldSpeak && voiceModeRef.current === "live") {
+        const liveText = visionContext
+          ? `(The camera currently sees: ${visionContext})\n${content}`
+          : content;
+        if (geminiLive.sendText(liveText)) return; // reply arrives via Live events
+      }
+
       try {
         const response = await sendChat(
           {
@@ -986,7 +1345,15 @@ export default function Page() {
         setAvatarState("error");
       }
     },
-    [messages, memory, autoCaptureVision, liveVisionEnabled, routeVisionTurn, voiceReply],
+    [
+      messages,
+      memory,
+      autoCaptureVision,
+      liveVisionEnabled,
+      routeVisionTurn,
+      voiceReply,
+      geminiLive.sendText,
+    ],
   );
 
   // ----- mic actions -----
@@ -1090,6 +1457,36 @@ export default function Page() {
     primeSpeechSynthesis();
     primeTtsAudio();
     autoRestartCountRef.current = 0; // fresh manual turn
+
+    // ----- Live voice mode: the mic press toggles the realtime session's mic.
+    // This applies in camera mode too — Live Vision streams the frames into
+    // the same session, so speech-to-speech works over what the camera sees.
+    if (voiceModeRef.current === "live") {
+      if (geminiLive.micActive) {
+        // End the live conversation turn-taking: close the mic, silence any
+        // tail audio, settle to idle. The session stays open for the next press.
+        liveEngagedRef.current = false;
+        geminiLive.stopMic();
+        interruptSpeech();
+        liveSinkRef.current = null;
+        setAvatarState("idle");
+      } else {
+        interruptSpeech();
+        void geminiLive.startMic().then((ok) => {
+          if (ok) {
+            liveEngagedRef.current = true;
+            setAvatarState("listening");
+          } else {
+            // Mic capture failed (permission / audio graph / dead socket) —
+            // fall back to the classic mic for this turn, no dead air.
+            console.warn("[voice] Live mic unavailable — using the classic mic");
+            startListening();
+          }
+        });
+      }
+      return;
+    }
+
     if (pushToTalk) {
       startListening();
     } else {
@@ -1107,7 +1504,16 @@ export default function Page() {
         startListening();
       }
     }
-  }, [avatarState, pushToTalk, startListening, stopListening, interruptSpeech]);
+  }, [
+    avatarState,
+    pushToTalk,
+    startListening,
+    stopListening,
+    interruptSpeech,
+    geminiLive.micActive,
+    geminiLive.startMic,
+    geminiLive.stopMic,
+  ]);
 
   const handleMicRelease = useCallback(() => {
     if (pushToTalk) {
@@ -1230,6 +1636,24 @@ export default function Page() {
     setViewMode("chat");
   }, [avatarState, stopListening, interruptSpeech]);
 
+  // Closing Settings: the Live token's prompt was minted at connect and can't
+  // change, so if the saved profile (name etc.) was edited while a session is
+  // open, hand her the update in-band — she acknowledges and uses it for the
+  // rest of the call. New sessions get it from the token as usual.
+  const handleSettingsClose = useCallback(() => {
+    setSettingsOpen(false);
+    if (voiceModeRef.current !== "live") return;
+    const nowJson = JSON.stringify(loadMemory());
+    if (nowJson === liveMemoryJsonRef.current) return;
+    liveMemoryJsonRef.current = nowJson;
+    const lines = formatMemory(loadMemory());
+    geminiLive.sendText(
+      `[System note: the user just updated their saved profile in Settings. Current profile:\n${
+        lines || "- (cleared)"
+      }\nAcknowledge in one short sentence and use this from now on.]`,
+    );
+  }, [geminiLive.sendText]);
+
   // ----- cleanup on unmount -----
   useEffect(() => {
     return () => {
@@ -1287,6 +1711,22 @@ export default function Page() {
               )}
             </AnimatePresence>
 
+            {/* Transient voice-pipeline notice (e.g. Live → Classic failover).
+                Informational tone, consistent with the offline banner pattern. */}
+            <AnimatePresence>
+              {voiceModeNotice && (
+                <motion.p
+                  key="voice-mode-notice"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="glass absolute left-1/2 top-[calc(4.5rem+env(safe-area-inset-top))] z-30 -translate-x-1/2 whitespace-nowrap rounded-full px-4 py-1.5 text-xs text-ink-secondary"
+                >
+                  {voiceModeNotice}
+                </motion.p>
+              )}
+            </AnimatePresence>
+
             {/* Top bar: identity on the left, the four global controls on the
                 right (transcript · theme · hands-free · settings). */}
             <header className="relative z-20 flex items-center justify-between gap-2 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6">
@@ -1296,7 +1736,10 @@ export default function Page() {
                   <span className="truncate text-xl font-bold leading-none tracking-tight text-ink-primary sm:text-2xl">
                     {assistantDisplayName}
                   </span>
-                  <StatusPill status={pillStatus} />
+                  <span className="flex items-center gap-1.5">
+                    <StatusPill status={pillStatus} />
+                    {viewMode === "call" && <VoiceModePill mode={voiceMode} />}
+                  </span>
                 </div>
               </div>
 
@@ -1658,7 +2101,7 @@ export default function Page() {
 
       <SettingsPanel
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={handleSettingsClose}
         memory={memory}
         onMemoryChange={setMemory}
         volume={volume}

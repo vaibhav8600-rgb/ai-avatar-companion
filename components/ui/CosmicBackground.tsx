@@ -157,10 +157,6 @@ export default function CosmicBackground() {
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden
-      className="starfield pointer-events-none fixed inset-0"
-    />
+    <canvas ref={canvasRef} aria-hidden className="starfield pointer-events-none fixed inset-0" />
   );
 }

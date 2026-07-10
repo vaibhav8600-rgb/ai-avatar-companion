@@ -10,6 +10,7 @@ describe("useSimliAvatar", () => {
       "speak",
       "speakChunks",
       "speakStream",
+      "sendPcm",
       "clear",
       "stop",
     ] as const) {
@@ -32,5 +33,10 @@ describe("useSimliAvatar", () => {
     const { result } = renderHook(() => useSimliAvatar({}));
     expect(() => result.current.clear()).not.toThrow();
     expect(() => result.current.stop()).not.toThrow();
+  });
+
+  it("sendPcm (Gemini Live audio) throws when the avatar isn't connected", () => {
+    const { result } = renderHook(() => useSimliAvatar({}));
+    expect(() => result.current.sendPcm(new Uint8Array(4))).toThrow(/not connected/i);
   });
 });

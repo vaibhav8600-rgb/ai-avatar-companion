@@ -70,8 +70,11 @@ microphone permission, and speak.
 | Avatar       | Toggle live video ↔ still image in Settings                                     | ✅     |
 | Avatar       | State-driven aura (idle / listening / thinking / speaking / error)              | ✅     |
 | Avatar       | Watchdog recovery — never gets stuck on "Thinking" if the stream stalls         | ✅     |
-| Voice        | **Streaming TTS** — audio plays as it's synthesized; first word in ~1s          | ✅     |
-| UX           | Barge-in: start talking and she stops mid-sentence                              | ✅     |
+| Voice        | **Gemini Live realtime voice (primary)** — one WebSocket replaces STT→chat→TTS  | ✅     |
+| Voice        | Automatic fallback to the classic pipeline (connect fail or mid-call drop)      | ✅     |
+| Voice        | **Streaming TTS** (classic) — audio plays as it's synthesized; first word ~1s   | ✅     |
+| UX           | Barge-in: start talking and she stops mid-sentence (native VAD in Live mode)    | ✅     |
+| UX           | Voice-mode badge (Live / Classic) so you always know which pipeline is active   | ✅     |
 | UX           | **Captions** — show her spoken reply as on-screen text (accessibility)          | ✅     |
 | UX           | Offline banner + one-tap **Retry** on a failed turn                             | ✅     |
 | UX           | Settings panel, collapsible transcript, error handling                          | ✅     |
@@ -108,35 +111,60 @@ a same-origin / shared-secret check, then a per-IP sliding-window rate limit
 
 ### A voice-call turn (step by step)
 
+Voice is **Live-first**: when `ENABLE_GEMINI_LIVE` + `GOOGLE_API_KEY` are set,
+the call opens a realtime **Gemini Live** session and the whole
+STT → chat → TTS round trip collapses into one low-latency WebSocket. The
+classic pipeline stays fully intact underneath and takes over automatically
+whenever Live can't.
+
 ```
-You speak ─▶ Web Speech STT ─▶ [Live Vision? classify intent] ─▶ POST /api/chat
-                                                                       │ reply text
-                                                                       ▼
-              TTS chain:  Deepgram (streamed) ─▶ Gemini (buffered) ─▶ browser
-                         │ 16kHz PCM, played as it arrives    │ (last-resort voice)
-              ┌──────────┴───────────┐
-              ▼ live mode            ▼ still mode
-   PCM stream → Simli          Web Audio plays the
-   (lip-synced video)          PCM stream (still image)
+Call view opens ─▶ POST /api/live-token (ephemeral token; key stays server-side)
+        │ success                                    │ 4xx / failure
+        ▼                                            ▼
+   LIVE MODE                                    CLASSIC MODE
+   mic PCM ──▶ WebSocket direct to Google       You speak ─▶ Web Speech STT
+   audio + transcripts stream back                ─▶ [Live Vision? classify] ─▶ POST /api/chat
+        │ base64 PCM (24 kHz)                          │ reply text
+        ▼                                              ▼
+   same playback path as classic:               TTS chain: Deepgram (streamed)
+   Simli sendPcm (lip-sync video)                 ─▶ Gemini (buffered) ─▶ browser
+   or Web Audio PcmSink (still)                 ─▶ Simli / Web Audio (as at left)
+
+   Live drops mid-call (GoAway / network)? ──▶ transcripts flushed into shared
+   history ──▶ classic mode continues the SAME conversation, no context lost.
 ```
+
+**Live mode turn:** press the mic once — it stays open (continuous
+conversation). Your speech streams to Gemini, which does STT + VAD server-side;
+her reply comes back as native audio plus text transcription. The audio feeds
+the **same playback code** the classic chain uses (Simli `sendPcm` for the
+lip-synced face, the Web-Audio PCM sink for still mode), and both transcripts
+append to the **same shared history** the classic pipeline reads. Barge-in is
+native: just start talking and the server interrupts her.
+
+**Classic mode turn** (no Live key, feature off, or after a failover):
 
 1. **You speak** → transcribed locally by the Web Speech API. Mid-sentence
    pauses don't cut you off (silence-finalize); on mobile the mic auto-restarts
    if the engine self-stops, and **hands-free mode** re-opens it after each reply.
 2. If the camera is open in **Live Vision**, the turn is first classified by
    `visionIntentRouter`; a vision intent captures a frame and may answer directly
-   or attach "what the camera sees" context to the chat call.
+   or attach "what the camera sees" context to the chat call. (Vision always
+   uses this classic path — Live mode is audio-only by design.)
 3. The transcript (recent-turn window + memory + system prompt) goes to
    **`/api/chat`**, which calls the configured provider and returns the reply.
 4. The reply is voiced by the **streaming TTS chain** (**Deepgram streamed →
    Gemini buffered → browser**) and played as the audio arrives, so she starts
    talking within ~a second instead of waiting for the whole clip.
-5. **Live mode:** the 16 kHz PCM stream feeds **Simli**, which lip-syncs a
+5. **Live avatar:** the 16 kHz PCM stream feeds **Simli**, which lip-syncs a
    photoreal face. **Still mode:** Web Audio plays the PCM stream over the still
    image. A **watchdog** recovers to the browser voice if the live stream accepts
    audio but never starts speaking.
 6. **Barge-in:** start talking (or tap the mic) and any in-progress speech stops
    immediately.
+
+A small **Live / Classic badge** next to the status pill always shows which
+pipeline is active; failover transitions are logged to the console.
 
 ### A Mira Vision turn
 
@@ -159,16 +187,18 @@ video is ever stored — only thumbnails you capture, in your browser's IndexedD
 
 ### Graceful degradation (nothing hard-fails)
 
-| If this is missing / fails…   | …the app does this instead                                  |
-| ----------------------------- | ----------------------------------------------------------- |
-| Chosen AI provider key        | Falls back to any other configured provider, then demo mode |
-| Deepgram TTS                  | Falls back to Gemini TTS, then the browser voice            |
-| Simli (live avatar)           | Falls back to still image + browser/Web-Audio voice         |
-| Live stream stalls            | Watchdog recovers to the browser voice                      |
-| Camera / mic denied           | Voice/vision disabled gracefully; text chat still works     |
-| Network offline               | Offline banner + one-tap Retry on the failed turn           |
-| Upstash Redis                 | Falls back to the in-memory rate limiter                    |
-| Web Speech API (e.g. Firefox) | Use the text chat / text input                              |
+| If this is missing / fails…            | …the app does this instead                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Chosen AI provider key                 | Falls back to any other configured provider, then demo mode                                             |
+| Gemini Live (no key / connect failure) | Falls back to the classic 3-tier voice chain instantly — no user action needed                          |
+| Gemini Live drops mid-call             | Fails over to the classic pipeline; conversation context preserved (transcripts land in shared history) |
+| Deepgram TTS                           | Falls back to Gemini TTS, then the browser voice                                                        |
+| Simli (live avatar)                    | Falls back to still image + browser/Web-Audio voice                                                     |
+| Live stream stalls                     | Watchdog recovers to the browser voice                                                                  |
+| Camera / mic denied                    | Voice/vision disabled gracefully; text chat still works                                                 |
+| Network offline                        | Offline banner + one-tap Retry on the failed turn                                                       |
+| Upstash Redis                          | Falls back to the in-memory rate limiter                                                                |
+| Web Speech API (e.g. Firefox)          | Use the text chat / text input                                                                          |
 
 ---
 
@@ -210,9 +240,34 @@ avatar is silently disabled and the still-image experience is used instead.
 
 ### Voice in both modes
 
-Both **Live** and **Still image** modes speak through the same 3-tier fallback
-chain (live mode lip-syncs the audio on Simli; still mode plays it via Web
-Audio):
+Voice is **Live-first**: with `ENABLE_GEMINI_LIVE=true` and a `GOOGLE_API_KEY`,
+calls run over a realtime **Gemini Live** session (one WebSocket: server-side
+STT/VAD in, native audio + transcription out — the browser connects directly
+to Google with a short-lived ephemeral token from `/api/live-token`). Set
+`GEMINI_LIVE_MODEL` to move to a newer Live model without a redeploy, and
+`GEMINI_LIVE_VOICE` to pick her voice (falls back to `GEMINI_TTS_VOICE`, then
+Aoede — set one explicitly, or Google's default **male** voice is used). Live
+audio plays through the exact same paths described below (Simli lip-sync or
+the Web-Audio sink), and if Live is unavailable or drops, the call continues
+on the classic chain with full context.
+
+**Live Vision:** with the camera open in Live mode, ~1 fps frames stream
+directly into the Live session (`realtimeInput.video`) and the live mic stays
+on — Mira _sees_ through Gemini Live itself and talks about what's in view,
+no per-question vision round trip. Mira's persona, your saved memory, the
+recent conversation, **and a catalog of your taught visual memories** are
+locked into the session's ephemeral token server-side (the only context
+channel a constrained Live session honors), so she recognizes saved things in
+frame. Saving works by voice too: **Live tool calling** — say "remember this
+as my red mug" and the model calls `save_visual_memory`, which the app
+executes against the same IndexedDB store the classic flows use (objects
+only; people always go through the consent-gated Teach Person button). The
+Look button and Teach confirmations also speak through the Live session. The
+classic capture→analyze flow remains the fallback in classic voice mode.
+
+Whichever pipeline produced the reply, both **Live avatar** and **Still image**
+modes speak through the same playback code; the classic pipeline's 3-tier
+fallback chain is:
 
 1. **Deepgram Aura** (`/api/tts/deepgram`) — primary, **streamed**: 16 kHz PCM is
    played as it's synthesized, so the first word starts almost immediately
@@ -294,6 +349,7 @@ ai-avatar-companion/
 ├── app/
 │   ├── api/
 │   │   ├── chat/route.ts          # AI proxy: Anthropic / OpenAI / Google (server only)
+│   │   ├── live-token/route.ts    # Mints a Gemini Live ephemeral token (server only)
 │   │   ├── tts/route.ts           # Gemini text-to-speech → base64 PCM (server only)
 │   │   ├── tts/deepgram/route.ts  # Deepgram Aura TTS → base64 PCM (primary, server only)
 │   │   ├── simli-session/route.ts # Mints a Simli session token (server only)
@@ -316,12 +372,14 @@ ai-avatar-companion/
 ├── lib/
 │   ├── apiClient.ts               # Frontend → /api/chat
 │   ├── apiGuard.ts                # Same-origin guard + rate limit (Upstash Redis, in-memory fallback)
+│   ├── systemPrompt.ts            # Shared persona prompt (classic chat + Live session setup)
 │   ├── speechRecognition.ts       # Web Speech API wrapper (STT, silence finalize)
 │   ├── speechSynthesis.ts         # SpeechSynthesis wrapper + voice picker (fallback TTS)
-│   ├── ttsAudio.ts                # TTS fetch chain + chunked PCM playback (still mode)
+│   ├── ttsAudio.ts                # TTS fetch chain + PCM playback incl. Live PcmSink (still mode)
 │   ├── textChunks.ts              # Splits a reply into prefetchable sentence chunks
 │   ├── audio.ts                   # Base64 PCM decode + resample to 16kHz for Simli
-│   ├── useSimliAvatar.ts          # Live avatar lifecycle hook (connect/speakChunks/clear/stop)
+│   ├── useSimliAvatar.ts          # Live avatar lifecycle hook (connect/speak*/sendPcm/clear/stop)
+│   ├── useGeminiLive.ts           # Gemini Live session hook (WS, mic streaming, transcripts, failover)
 │   ├── useCamera.ts               # getUserMedia camera hook + frame capture
 │   ├── visionClient.ts            # Vision analyze fetch + thumbnail candidates + matching
 │   ├── visionIntentRouter.ts      # Classifies a turn into a vision intent

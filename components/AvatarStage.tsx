@@ -60,8 +60,15 @@ export default function AvatarStage({
   return (
     <div className="relative flex flex-col items-center justify-center">
       <AvatarOrb state={state} levelRef={levelRef} size={size}>
+        {/* transform-gpu + isolate are load-bearing: the WebRTC <video> (and the
+            backdrop-blur loader) are GPU-composited layers, and while this
+            container animates its speaking scale, Chrome can skip the ancestor
+            border-radius clip on those layers for a few frames — the round
+            portrait flashes SQUARE. Promoting the clip container to its own
+            isolated composited layer (and rounding the video itself) keeps the
+            clip on the GPU path. */}
         <div
-          className={`relative overflow-hidden rounded-full transition-transform duration-700 ${
+          className={`relative isolate transform-gpu overflow-hidden rounded-full transition-transform duration-700 ${
             isSpeaking ? "scale-[1.015]" : "scale-100"
           }`}
           style={{ width: portrait, height: portrait }}
@@ -80,7 +87,7 @@ export default function AvatarStage({
               // fall back to the still portrait instead of a black frame.
               onEmptied={() => setVideoPlaying(false)}
               onEnded={() => setVideoPlaying(false)}
-              className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
+              className={`absolute inset-0 h-full w-full rounded-full object-cover transition-opacity duration-500 ${
                 showVideo ? "opacity-100" : "opacity-0"
               }`}
             />
@@ -103,7 +110,7 @@ export default function AvatarStage({
           )}
 
           {showLoader && (
-            <div className="absolute inset-0 grid place-items-center bg-cosmic-base/55 backdrop-blur-sm animate-fade-up">
+            <div className="absolute inset-0 grid place-items-center rounded-full bg-cosmic-base/55 backdrop-blur-sm animate-fade-up">
               <div className="flex flex-col items-center gap-3">
                 <div className="h-10 w-10 rounded-full border-2 border-white/15 border-t-accent-cyan animate-spin" />
                 <p className="text-[11px] uppercase tracking-[0.18em] text-ink-secondary">
