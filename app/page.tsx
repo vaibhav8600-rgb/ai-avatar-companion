@@ -238,6 +238,17 @@ export default function Page() {
   const liveActive =
     liveAvatarEnabled && (liveAvatar.status === "connecting" || liveAvatar.status === "ready");
   const liveAvatarSupported = liveAvatar.status !== "unconfigured";
+  // Stable method handles for effect/callback dependency lists. The hook
+  // memoizes each method, but returns a FRESH object every render — depending
+  // on `liveAvatar` itself would re-run consumers per render (the eager
+  // connect effect would loop connect/stop).
+  const {
+    ensureConnected: liveAvatarEnsureConnected,
+    speakStream: liveAvatarSpeakStream,
+    speakChunks: liveAvatarSpeakChunks,
+    clear: liveAvatarClear,
+    stop: liveAvatarStop,
+  } = liveAvatar;
 
   // ----- voice pipeline mode: Gemini Live (primary) vs classic (fallback) -----
   // "live"    = realtime Gemini Live WebSocket session (server-side STT/VAD,
@@ -421,6 +432,16 @@ export default function Page() {
       }
     },
   });
+  // Stable method/state handles for dependency lists (same rationale as the
+  // liveAvatar destructure above — the hook object is fresh every render).
+  const {
+    connect: liveConnect,
+    disconnect: liveDisconnect,
+    startMic: liveStartMic,
+    stopMic: liveStopMic,
+    sendText: liveSendText,
+    micActive: liveMicActive,
+  } = geminiLive;
 
   // Attempt the Live session eagerly while the call view is open (mirrors the
   // Simli eager-connect pattern) so the first mic press has zero added
@@ -453,7 +474,7 @@ export default function Page() {
         // no visual memories — connect without the catalog
       }
       if (cancelled) return;
-      const ok = await geminiLive.connect({
+      const ok = await liveConnect({
         memory: memorySnapshot,
         history: historySnapshot,
         visualMemories,
@@ -467,11 +488,10 @@ export default function Page() {
     return () => {
       cancelled = true;
       liveEngagedRef.current = false;
-      geminiLive.disconnect();
+      liveDisconnect();
       setVoiceMode("classic");
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, geminiLive.connect, geminiLive.disconnect]);
+  }, [viewMode, liveConnect, liveDisconnect]);
 
   // ----- Live Vision: camera frames stream straight into the Live session -----
   // While the camera is open in Live mode, Mira SEES through Gemini Live
@@ -667,13 +687,13 @@ export default function Page() {
   useEffect(() => {
     if (liveAvatarEnabled && viewMode === "call") {
       liveStartedRef.current = true;
-      void liveAvatar.ensureConnected();
+      void liveAvatarEnsureConnected();
     } else if (liveStartedRef.current) {
       // Image mode or text chat — drop the stream so we don't keep billing.
       liveStartedRef.current = false;
-      liveAvatar.stop();
+      liveAvatarStop();
     }
-  }, [liveAvatarEnabled, viewMode, liveAvatar.ensureConnected, liveAvatar.stop]);
+  }, [liveAvatarEnabled, viewMode, liveAvatarEnsureConnected, liveAvatarStop]);
 
   // ----- Mira Vision: speak + respond helpers -----
   // Immediately silence any current speech (browser TTS, Gemini TTS audio, and
@@ -684,8 +704,8 @@ export default function Page() {
     // Drop the (now dead) sink reference — pushing Live audio into a stopped
     // sink is a silent no-op, which would mute the next whole model turn.
     liveSinkRef.current = null;
-    liveAvatar.clear();
-  }, [liveAvatar.clear]);
+    liveAvatarClear();
+  }, [liveAvatarClear]);
 
   // THE single voice pipeline used by every reply (chat + all vision flows +
   // errors): interrupt any current speech, then speak via Simli (live mode) or
@@ -700,7 +720,7 @@ export default function Page() {
       // path sends the full text and plays it as it arrives.
       const chunks = splitIntoSpeechChunks(text);
 
-      const live = liveAvatarEnabled ? await liveAvatar.ensureConnected() : false;
+      const live = liveAvatarEnabled ? await liveAvatarEnsureConnected() : false;
       if (live) {
         // Stay in "thinking" through TTS — Simli emits its own "speaking" event
         // when audio actually starts (wired in the hook).
@@ -709,7 +729,7 @@ export default function Page() {
         // Tier 1: stream Deepgram straight into Simli (fastest).
         if (USE_TTS_STREAMING) {
           try {
-            await liveAvatar.speakStream(text);
+            await liveAvatarSpeakStream(text);
             ok = true;
           } catch {
             // fall through to buffered Gemini
@@ -718,14 +738,14 @@ export default function Page() {
         // Tier 2: buffered Gemini chunks.
         if (!ok) {
           try {
-            await liveAvatar.speakChunks(chunks, ttsModel, geminiVoice);
+            await liveAvatarSpeakChunks(chunks, ttsModel, geminiVoice);
             ok = true;
           } catch {
             // fall through to browser
           }
         }
         if (!ok) {
-          liveAvatar.clear();
+          liveAvatarClear();
           speakWithBrowser(text);
           return;
         }
@@ -733,7 +753,7 @@ export default function Page() {
         // (lost event / stalled stream), don't leave the UI stuck on Thinking.
         setTimeout(() => {
           if (!spokeRef.current && avatarStateRef.current === "thinking") {
-            liveAvatar.clear();
+            liveAvatarClear();
             speakWithBrowser(text);
           }
         }, 5000);
@@ -787,10 +807,10 @@ export default function Page() {
       ttsModel,
       geminiVoice,
       volume,
-      liveAvatar.ensureConnected,
-      liveAvatar.speakStream,
-      liveAvatar.speakChunks,
-      liveAvatar.clear,
+      liveAvatarEnsureConnected,
+      liveAvatarSpeakStream,
+      liveAvatarSpeakChunks,
+      liveAvatarClear,
       speakWithBrowser,
     ],
   );
@@ -843,7 +863,7 @@ export default function Page() {
     // Falls through to the classic capture→analyze flow when not live.
     if (
       voiceModeRef.current === "live" &&
-      geminiLive.sendText(
+      liveSendText(
         "Describe what you can see in the camera right now, briefly and naturally. " +
           "If it matches one of your saved visual memories, say which one.",
       )
@@ -889,7 +909,7 @@ export default function Page() {
     } finally {
       setVisionBusy(false);
     }
-  }, [camera, speakMiraResponse, geminiLive.sendText]);
+  }, [camera, speakMiraResponse, liveSendText]);
 
   const handleTeachObjectSave = useCallback(
     async (frame: string, label: string, notes: string) => {
@@ -917,7 +937,7 @@ export default function Page() {
         // sessions get it from the token's visual-memory catalog).
         if (!(
           voiceModeRef.current === "live" &&
-          geminiLive.sendText(
+          liveSendText(
             `[System note: via the Teach button, the user just taught you a new visual memory: "${label}" — ${description}. Briefly confirm you'll remember it.]`,
           )
         )) {
@@ -930,7 +950,7 @@ export default function Page() {
         setAvatarState("idle");
       }
     },
-    [speakMiraResponse, geminiLive.sendText],
+    [speakMiraResponse, liveSendText],
   );
 
   const handleTeachPersonSave = useCallback(
@@ -955,7 +975,7 @@ export default function Page() {
         });
         if (!(
           voiceModeRef.current === "live" &&
-          geminiLive.sendText(
+          liveSendText(
             `[System note: with explicit consent via the Teach Person button, the user just taught you a known person: "${name}"${description ? ` — ${description}` : ""}. Briefly confirm you'll remember them, and mention they can remove this anytime in Settings.]`,
           )
         )) {
@@ -970,7 +990,7 @@ export default function Page() {
         setAvatarState("idle");
       }
     },
-    [speakMiraResponse, geminiLive.sendText],
+    [speakMiraResponse, liveSendText],
   );
 
   const handleForget = useCallback(
@@ -1300,7 +1320,7 @@ export default function Page() {
         const liveText = visionContext
           ? `(The camera currently sees: ${visionContext})\n${content}`
           : content;
-        if (geminiLive.sendText(liveText)) return; // reply arrives via Live events
+        if (liveSendText(liveText)) return; // reply arrives via Live events
       }
 
       try {
@@ -1352,7 +1372,7 @@ export default function Page() {
       liveVisionEnabled,
       routeVisionTurn,
       voiceReply,
-      geminiLive.sendText,
+      liveSendText,
     ],
   );
 
@@ -1462,17 +1482,17 @@ export default function Page() {
     // This applies in camera mode too — Live Vision streams the frames into
     // the same session, so speech-to-speech works over what the camera sees.
     if (voiceModeRef.current === "live") {
-      if (geminiLive.micActive) {
+      if (liveMicActive) {
         // End the live conversation turn-taking: close the mic, silence any
         // tail audio, settle to idle. The session stays open for the next press.
         liveEngagedRef.current = false;
-        geminiLive.stopMic();
+        liveStopMic();
         interruptSpeech();
         liveSinkRef.current = null;
         setAvatarState("idle");
       } else {
         interruptSpeech();
-        void geminiLive.startMic().then((ok) => {
+        void liveStartMic().then((ok) => {
           if (ok) {
             liveEngagedRef.current = true;
             setAvatarState("listening");
@@ -1510,9 +1530,9 @@ export default function Page() {
     startListening,
     stopListening,
     interruptSpeech,
-    geminiLive.micActive,
-    geminiLive.startMic,
-    geminiLive.stopMic,
+    liveMicActive,
+    liveStartMic,
+    liveStopMic,
   ]);
 
   const handleMicRelease = useCallback(() => {
@@ -1647,12 +1667,12 @@ export default function Page() {
     if (nowJson === liveMemoryJsonRef.current) return;
     liveMemoryJsonRef.current = nowJson;
     const lines = formatMemory(loadMemory());
-    geminiLive.sendText(
+    liveSendText(
       `[System note: the user just updated their saved profile in Settings. Current profile:\n${
         lines || "- (cleared)"
       }\nAcknowledge in one short sentence and use this from now on.]`,
     );
-  }, [geminiLive.sendText]);
+  }, [liveSendText]);
 
   // ----- cleanup on unmount -----
   useEffect(() => {
