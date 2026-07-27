@@ -468,6 +468,9 @@ export function useGeminiLive(callbacks: UseGeminiLiveCallbacks) {
             }
             if (closingRef.current || generationRef.current !== gen) return; // intentional
             // Unexpected mid-call drop → preserve context, then fail over.
+            // Clear the cached connect promise, otherwise a later connect()
+            // would resolve with this dead session's `true` and never reconnect.
+            connectPromiseRef.current = null;
             stopMic();
             flushTranscripts();
             setStatus("error");

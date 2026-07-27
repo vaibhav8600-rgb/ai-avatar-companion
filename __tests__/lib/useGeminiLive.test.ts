@@ -86,7 +86,7 @@ async function connectLive(
     ok = result.current.connect(opts);
   });
   await flush(); // token fetch resolves, socket constructed
-  const ws = MockWebSocket.instances[0];
+  const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
   await act(async () => {
     ws.serverOpen();
     ws.serverMessage({ setupComplete: {} });
@@ -238,6 +238,20 @@ describe("useGeminiLive", () => {
     expect(got.model).toBe("Of course");
     expect(failover).toMatch(/1006/);
     expect(result.current.status).toBe("error");
+  });
+
+  it("an unexpected drop leaves connect() able to reconnect (fresh token)", async () => {
+    mockTokenResponse();
+    const { result } = renderHook(() => useGeminiLive({ onFailover: () => {} }));
+    const ws1 = await connectLive(result);
+    await act(async () => ws1.serverDrop(1007, "invalid argument"));
+
+    // The cached connect promise must be cleared on an unexpected close, or
+    // this would resolve with the DEAD session's `true` and never reconnect.
+    const ws2 = await connectLive(result);
+    expect(ws2).not.toBe(ws1);
+    expect(result.current.status).toBe("live");
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(2); // new token minted
   });
 
   it("disconnect() is intentional — no failover fires", async () => {

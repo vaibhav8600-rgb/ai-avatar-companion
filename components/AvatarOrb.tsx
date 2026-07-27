@@ -43,6 +43,25 @@ export function avatarToOrb(state: AvatarState): OrbState {
   }
 }
 
+// WebGL support, probed ONCE per page and cached. The probe canvas creates a
+// real GL context, so it must be released immediately: Chrome caps live
+// contexts (~16) and every leaked one pushes out the oldest — which is the
+// orb's own context ("Too many active WebGL contexts" → THREE Context Lost).
+let webglSupported: boolean | null = null;
+function hasWebgl(): boolean {
+  if (webglSupported !== null) return webglSupported;
+  try {
+    const gl =
+      document.createElement("canvas").getContext("webgl2") ||
+      document.createElement("canvas").getContext("webgl");
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    webglSupported = Boolean(gl);
+  } catch {
+    webglSupported = false;
+  }
+  return webglSupported;
+}
+
 function usePrefersReducedMotion() {
   const [reduce, setReduce] = useState(false);
   useEffect(() => {
@@ -80,6 +99,12 @@ export default function AvatarOrb({
     return () => document.removeEventListener("visibilitychange", on);
   }, []);
 
+  // Once per mount, never per render (the old version re-probed on every
+  // render through an unstable callback dep and leaked a context each time).
+  useEffect(() => {
+    if (!hasWebgl()) setWebglFailed(true);
+  }, []);
+
   const palette = orbPalette[orbState];
   // The ring canvas is drawn larger than the portrait so the ring encircles it.
   const canvasSize = size * 1.28;
@@ -103,14 +128,7 @@ export default function AvatarOrb({
         {useCss ? (
           <CssOrb state={orbState} />
         ) : (
-          <OrbErrorGuard onError={() => setWebglFailed(true)}>
-            <OrbCanvas
-              state={orbState}
-              levelRef={levelRef}
-              reduceMotion={reduce}
-              visible={visible}
-            />
-          </OrbErrorGuard>
+          <OrbCanvas state={orbState} levelRef={levelRef} reduceMotion={reduce} visible={visible} />
         )}
       </div>
 
@@ -127,22 +145,6 @@ export default function AvatarOrb({
       </div>
     </div>
   );
-}
-
-/** Catches a WebGL context-creation throw and flips to the CSS fallback. */
-function OrbErrorGuard({ onError, children }: { onError: () => void; children: ReactNode }) {
-  // R3F throws synchronously on context creation failure; the parent Canvas
-  // surfaces it. We can't try/catch across the reconciler cleanly, so we rely
-  // on a one-time check here.
-  useEffect(() => {
-    try {
-      const c = document.createElement("canvas");
-      if (!c.getContext("webgl2") && !c.getContext("webgl")) onError();
-    } catch {
-      onError();
-    }
-  }, [onError]);
-  return <>{children}</>;
 }
 
 /** Animated CSS ring — reduced-motion / no-WebGL fallback. */
