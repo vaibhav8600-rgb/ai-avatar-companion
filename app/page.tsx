@@ -280,6 +280,22 @@ export default function Page() {
   // Memory snapshot the current Live token was minted with — lets Settings
   // close detect a profile change and update the running session in-band.
   const liveMemoryJsonRef = useRef("");
+  // Failover recovery: one reconnect attempt per call session. Both are refs
+  // because onFailover is passed INTO the hook that defines these functions.
+  const liveReconnectRef = useRef<() => Promise<boolean>>(async () => false);
+  const liveStartMicRef = useRef<() => Promise<boolean>>(async () => false);
+  const liveRetriedRef = useRef(false);
+
+  /** Hand the call over to the classic pipeline (reconnect exhausted). */
+  const goClassic = useCallback((wasEngaged: boolean, reason: string) => {
+    console.warn(`[voice] Switched to classic voice mode — ${reason}`);
+    setVoiceMode("classic");
+    setVoiceModeNotice("Live voice ended — continuing on the classic pipeline");
+    // Continue seamlessly: re-open the classic mic for the next turn. Context
+    // is preserved — the Live transcripts are already in `messages`, so the
+    // next /api/chat call knows everything said so far.
+    if (wasEngaged) setTimeout(() => startListeningRef.current(), 250);
+  }, []);
 
   const geminiLive = useGeminiLive({
     // Model audio: feed the EXACT same playback code the classic chain uses.
@@ -416,20 +432,31 @@ export default function Page() {
       return { ok: false, error: "unknown tool" };
     },
     onFailover: (reason) => {
-      console.warn(`[voice] Switched to classic voice mode — ${reason}`);
       liveSinkRef.current?.stop();
       liveSinkRef.current = null;
       const wasEngaged = liveEngagedRef.current;
       liveEngagedRef.current = false;
-      setVoiceMode("classic");
-      setVoiceModeNotice("Live voice ended — continuing on the classic pipeline");
       setAvatarState((s) => (s === "listening" || s === "speaking" ? "idle" : s));
-      // Continue the call seamlessly: re-open the classic mic for the next
-      // turn. Context is preserved — the Live transcripts are already in
-      // `messages`, so the next /api/chat call knows everything said so far.
-      if (wasEngaged) {
-        setTimeout(() => startListeningRef.current(), 250);
+
+      // A single dropped socket shouldn't downgrade the rest of the call: try
+      // ONE reconnect (fresh token; transcripts are already flushed into
+      // `messages`, so the new session's prompt carries the context) before
+      // handing over to classic. Budget is one attempt per call session so a
+      // server that keeps rejecting can't ping-pong.
+      if (!liveRetriedRef.current) {
+        liveRetriedRef.current = true;
+        console.warn(`[voice] Live session dropped (${reason}) — reconnecting once`);
+        void liveReconnectRef.current().then((ok) => {
+          if (ok) {
+            console.info("[voice] Gemini Live reconnected");
+            if (wasEngaged) void liveStartMicRef.current();
+            return;
+          }
+          goClassic(wasEngaged, reason);
+        });
+        return;
       }
+      goClassic(wasEngaged, reason);
     },
   });
   // Stable method/state handles for dependency lists (same rationale as the
@@ -451,47 +478,57 @@ export default function Page() {
   // failover. Cleanup-based on purpose: React StrictMode double-invokes
   // effects in dev (mount → cleanup → mount), and a run-once ref guard here
   // left the second pass permanently disconnected — classic mode forever.
+  // Open a Live session with the CURRENT persisted context. Reads the stores
+  // DIRECTLY, not React state: the eager effect below runs on first mount
+  // before the restore-persistence effect has populated `memory`/`messages`,
+  // and a token minted with empty context left Live-Mira amnesiac (no user
+  // name, no history) for the whole session. localStorage/IndexedDB are always
+  // current — the save effects persist on every change. Shared with the
+  // failover reconnect so both paths carry identical context.
+  const connectLive = useCallback(async (): Promise<boolean> => {
+    const memorySnapshot = loadMemory();
+    let visualMemories: { type: string; label: string; description: string }[] = [];
+    try {
+      visualMemories = (await listMemories()).map((m) => ({
+        type: m.type,
+        label: m.label,
+        description: m.description,
+      }));
+    } catch {
+      // no visual memories — connect without the catalog
+    }
+    const ok = await liveConnect({
+      memory: memorySnapshot,
+      history: loadHistory(),
+      visualMemories,
+    });
+    if (ok) liveMemoryJsonRef.current = JSON.stringify(memorySnapshot);
+    return ok;
+  }, [liveConnect]);
+  // onFailover fires from inside the hook, which is created above this point —
+  // reach the recovery path through a ref.
+  useEffect(() => {
+    liveReconnectRef.current = connectLive;
+    liveStartMicRef.current = liveStartMic;
+  }, [connectLive, liveStartMic]);
+
   useEffect(() => {
     if (viewMode !== "call") return;
     let cancelled = false;
-    void (async () => {
-      // Read persisted context DIRECTLY from the stores, not from React state:
-      // this effect runs on first mount BEFORE the restore-persistence effect
-      // has populated `memory`/`messages`, and a token minted with empty
-      // context left Live-Mira amnesiac (no user name, no history) for the
-      // whole session. localStorage/IndexedDB are always current — the save
-      // effects persist on every change.
-      const memorySnapshot = loadMemory();
-      const historySnapshot = loadHistory();
-      let visualMemories: { type: string; label: string; description: string }[] = [];
-      try {
-        visualMemories = (await listMemories()).map((m) => ({
-          type: m.type,
-          label: m.label,
-          description: m.description,
-        }));
-      } catch {
-        // no visual memories — connect without the catalog
-      }
-      if (cancelled) return;
-      const ok = await liveConnect({
-        memory: memorySnapshot,
-        history: historySnapshot,
-        visualMemories,
-      });
+    liveRetriedRef.current = false; // fresh retry budget per call session
+    void connectLive().then((ok) => {
       if (ok && !cancelled) {
-        liveMemoryJsonRef.current = JSON.stringify(memorySnapshot);
         setVoiceMode("live");
         console.info("[voice] Gemini Live session ready — realtime voice active");
       }
-    })();
+    });
     return () => {
       cancelled = true;
       liveEngagedRef.current = false;
       liveDisconnect();
       setVoiceMode("classic");
     };
-  }, [viewMode, liveConnect, liveDisconnect]);
+  }, [viewMode, connectLive, liveDisconnect]);
 
   // ----- Live Vision: camera frames stream straight into the Live session -----
   // While the camera is open in Live mode, Mira SEES through Gemini Live
